@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>DON-BOT Component Kit — Split-Stroke Stencil UI</title>
+  <link rel="stylesheet" href="./don-components.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 10%, rgba(63, 193, 255, 0.08), transparent 36%),
+        radial-gradient(circle at 88% 85%, rgba(255, 90, 31, 0.07), transparent 38%),
+        var(--don-bg);
+      color: var(--don-ink);
+      font-family: var(--don-font-sans);
+      padding: clamp(2rem, 5vw, 4.5rem) clamp(1.25rem, 4vw, 3.5rem);
+    }
+    .kit-wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3.5rem;
+    }
+    .kit-section-label {
+      font-family: var(--don-font-mono);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--don-muted);
+      margin-bottom: 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .kit-section-label strong { color: #ffffff; }
+    .kit-section-label em { color: var(--don-orange); font-style: normal; }
+    .kit-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.15rem;
+      align-items: center;
+    }
+    .kit-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.35rem;
+    }
+    .glyph-stage {
+      background: #05070b;
+      border: 1px solid var(--don-line);
+      border-radius: 18px 4px 18px 4px;
+      padding: clamp(2rem, 5vw, 3.5rem);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.25rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="kit-wrap">
+
+    <!-- 00 // SPLIT-STROKE STENCIL SVG WORDMARK (INSPIRED BY image.png) -->
+    <section>
+      <div class="kit-section-label"><strong>00</strong><em>/</em> Split-Stroke Stencil Wordmark (EGOS Alternates Geometry)</div>
+      <div class="glyph-stage">
+        <svg viewBox="0 0 640 130" width="100%" style="max-width:620px;height:auto;" role="img" aria-label="DON-BOT Split-Stroke Stencil Wordmark">
+          <!-- D: Solid left/bottom L-bar + hollow curved right arc with stencil break -->
+          <path d="M24 22 H46 V92 H82 V108 H24 Z" fill="#f3f5f9" />
+          <path d="M52 22 H84 C112 22 128 38 128 65 C128 92 112 108 86 108" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-linecap="round" />
+
+          <!-- O: Split half-hollow left arc + solid thick right arc + glowing electric ice core dot -->
+          <path d="M206 24 C178 24 160 41 160 65 C160 89 178 106 206 106" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-linecap="round" />
+          <path d="M214 24 C244 24 262 41 262 65 C262 89 244 106 214 106" fill="none" stroke="#f3f5f9" stroke-width="14" stroke-linecap="round" />
+          <circle cx="211" cy="65" r="8" fill="#3fc1ff" />
+
+          <!-- N: Hollow left/diagonal stroke + solid right stem -->
+          <path d="M298 106 V24 L366 106" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" />
+          <path d="M366 22 H382 V108 H366 Z" fill="#f3f5f9" />
+
+          <!-- Stencil Slash / Dash in Signal Orange -->
+          <rect x="406" y="59" width="24" height="10" rx="3" fill="#ff5a1f" />
+
+          <!-- B: Solid upper-right bowl + hollow lower-left frame -->
+          <path d="M454 22 V108 H504 C520 108 530 98 530 85 C530 74 522 66 510 64" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M466 22 H506 C522 22 532 31 532 44 C532 56 522 64 506 64 H466 Z" fill="#f3f5f9" />
+
+          <!-- O (compact) + T (solid top bar + hollow stem) -->
+          <circle cx="566" cy="65" r="24" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-dasharray="68 18" />
+          <circle cx="566" cy="65" r="5" fill="#ff5a1f" />
+
+          <path d="M604 22 H638 V36 H604 Z" fill="#f3f5f9" />
+          <path d="M621 44 V108" fill="none" stroke="#f3f5f9" stroke-width="4" stroke-linecap="round" />
+        </svg>
+        <div style="font-family:var(--don-font-mono);font-size:0.72rem;letter-spacing:0.24em;color:var(--don-muted);text-transform:uppercase;">
+          SPLIT SOLID FILL · HAIRLINE OUTLINE · STENCIL CUTS · CORE DOT
+        </div>
+      </div>
+    </section>
+
+    <!-- 01 // STENCIL-CUT ACTION BUTTONS -->
+    <section>
+      <div class="kit-section-label"><strong>01</strong><em>/</em> Stencil-Cut Action Buttons</div>
+      <div class="kit-row">
+        <button type="button" class="don-btn-stencil">
+          <span class="don-core-dot"></span>
+          Deploy Slice 01
+        </button>
+        <button type="button" class="don-btn-stencil don-btn-stencil--orange">
+          <span class="don-core-dot don-core-dot--orange"></span>
+          Authorize J-JEV Gate
+        </button>
+        <button type="button" class="don-btn-stencil">
+          Inspect WAL Spine →
+        </button>
+      </div>
+    </section>
+
+    <!-- 02 // DOTTED-O CORE TOGGLES -->
+    <section>
+      <div class="kit-section-label"><strong>02</strong><em>/</em> Dotted-O Core Toggles</div>
+      <div class="kit-row" style="gap:2rem;">
+        <label class="don-toggle-core">
+          <input type="checkbox" checked />
+          <span class="don-toggle-core__track"><span class="don-toggle-core__thumb"></span></span>
+          <span>J-JEV 300ms Gate</span>
+        </label>
+        <label class="don-toggle-core">
+          <input type="checkbox" />
+          <span class="don-toggle-core__track"><span class="don-toggle-core__thumb"></span></span>
+          <span>Blind Vault Lock</span>
+        </label>
+        <label class="don-toggle-core">
+          <input type="checkbox" checked />
+          <span class="don-toggle-core__track"><span class="don-toggle-core__thumb"></span></span>
+          <span>'Me'-Mode Telegram</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- 03 // SEGMENTED STENCIL STEPPER -->
+    <section>
+      <div class="kit-section-label"><strong>03</strong><em>/</em> Segmented Stencil Stepper (Click to Switch)</div>
+      <div class="don-stepper" id="demo-stepper">
+        <button type="button" class="don-step is-active"><span class="don-step__ring"></span>01 Origins</button>
+        <button type="button" class="don-step"><span class="don-step__ring"></span>02 Upgrade</button>
+        <button type="button" class="don-step"><span class="don-step__ring"></span>03 Augment</button>
+        <button type="button" class="don-step"><span class="don-step__ring"></span>04 Arm</button>
+        <button type="button" class="don-step"><span class="don-step__ring"></span>05 Network</button>
+      </div>
+    </section>
+
+    <!-- 04 // SPLIT-FRAME TELEMETRY CARDS -->
+    <section>
+      <div class="kit-section-label"><strong>04</strong><em>/</em> Split-Frame Telemetry Cards</div>
+      <div class="kit-grid">
+        <article class="don-card-split">
+          <div class="don-card-split__head">
+            <span class="don-card-split__index">01<span>/</span>SPINE</span>
+            <span class="don-core-dot"></span>
+          </div>
+          <h3 class="don-card-split__title">SQLite WAL + once()</h3>
+          <p class="don-card-split__body">Crash-proof local step checkpointing and single-writer file leases. Resumes mid-tool after SIGKILL.</p>
+        </article>
+
+        <article class="don-card-split">
+          <div class="don-card-split__head">
+            <span class="don-card-split__index">02<span>/</span>TRUST</span>
+            <span class="don-core-dot don-core-dot--orange"></span>
+          </div>
+          <h3 class="don-card-split__title">300ms J-JEV Gates</h3>
+          <p class="don-card-split__body">System-One pre-tool judgment gates paired with an un-promptable sibling Verifier outside prompt context.</p>
+        </article>
+
+        <article class="don-card-split">
+          <div class="don-card-split__head">
+            <span class="don-card-split__index">03<span>/</span>VAULT</span>
+            <span class="don-core-dot"></span>
+          </div>
+          <h3 class="don-card-split__title">Blind Credential Vault</h3>
+          <p class="don-card-split__body">Tokens, logins, and payment actions execute in the harness without ever entering the LLM context window.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- 05 // STENCIL INPUT & GATE APPROVAL BANNER -->
+    <section>
+      <div class="kit-section-label"><strong>05</strong><em>/</em> Stencil Input &amp; Gate Approval Deck</div>
+      <div style="display:flex;flex-direction:column;gap:1.5rem;">
+        <form class="don-input-stencil" onsubmit="event.preventDefault(); this.querySelector('button').textContent='LOCKED ✓';">
+          <input type="email" placeholder="operator@domain.com" aria-label="Operator email" required />
+          <button type="submit">Dispatch →</button>
+        </form>
+
+        <div class="don-gate-banner">
+          <div>
+            <div class="don-gate-banner__tag">J-JEV GATE // APPROVAL REQUIRED</div>
+            <p class="don-gate-banner__msg">Specialist 03 requests write lease on <code>migrations/004_wal_leases.sql</code></p>
+          </div>
+          <div class="kit-row">
+            <button type="button" class="don-btn-stencil don-btn-stencil--orange">Approve</button>
+            <button type="button" class="don-btn-stencil">Inspect Diff</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    document.querySelectorAll('#demo-stepper .don-step').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#demo-stepper .don-step').forEach((b) => b.classList.remove('is-active'));
+        btn.classList.add('is-active');
+      });
+    });
+  </script>
+</body>
+</html>

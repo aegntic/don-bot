@@ -1,0 +1,420 @@
+/* ==========================================================================
+   DON-BOT COMPONENT KIT — Split-Stroke Stencil Geometry (EGOS Alternates Style)
+   Palette: Obsidian (#090c11), Crisp White (#f3f5f9), Signal Orange (#ff5a1f),
+            Electric Ice Blue (#3fc1ff), Brushed Metal. Zero green.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+  --don-bg: #090c11;
+  --don-surface: #0f141d;
+  --don-surface-hi: #151c28;
+  --don-ink: #f3f5f9;
+  --don-muted: #8e99ab;
+  --don-orange: #ff5a1f;
+  --don-ice: #3fc1ff;
+  --don-line: rgba(243, 245, 249, 0.22);
+  --don-line-strong: rgba(243, 245, 249, 0.85);
+  --don-radius: 14px;
+  --don-font-display: 'Don Display', 'Space Grotesk', system-ui, sans-serif;
+  --don-font-mark: 'Don Mark', 'Don Display', system-ui, sans-serif;
+  --don-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --don-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* --------------------------------------------------------------------------
+   1. SPLIT-STROKE STENCIL BUTTONS (.don-btn-stencil)
+   Half solid bevelled cap + half hollow hairline outline with stencil notch
+   -------------------------------------------------------------------------- */
+.don-btn-stencil {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.85rem 1.5rem;
+  font-family: var(--don-font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--don-ink);
+  background: transparent;
+  border: 1.5px solid var(--don-line-strong);
+  border-radius: 10px 2px 10px 2px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.18s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* Solid top-left geometric cap mimicking the filled strokes in image.png */
+.don-btn-stencil::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 44%;
+  height: 4px;
+  background: var(--don-ink);
+  border-radius: 0 0 4px 0;
+  transition: width 0.25s cubic-bezier(0.22, 1, 0.36, 1), background 0.2s ease;
+}
+
+/* Intentional stencil gap cutout on bottom-left border */
+.don-btn-stencil::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 22%;
+  width: 14px;
+  height: 4px;
+  background: var(--don-bg);
+}
+
+.don-btn-stencil:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 22px rgba(63, 193, 255, 0.18);
+  border-color: var(--don-ice);
+}
+
+.don-btn-stencil:hover::before {
+  width: 68%;
+  background: var(--don-ice);
+}
+
+.don-btn-stencil--orange {
+  border-color: rgba(255, 90, 31, 0.75);
+}
+
+.don-btn-stencil--orange::before {
+  background: var(--don-orange);
+}
+
+.don-btn-stencil--orange:hover {
+  border-color: var(--don-orange);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 24px rgba(255, 90, 31, 0.25);
+}
+
+.don-btn-stencil--orange:hover::before {
+  background: var(--don-orange);
+}
+
+/* Core dot indicator (from the dotted 'O' glyph in image.png) */
+.don-core-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--don-ice);
+  box-shadow: 0 0 10px rgba(63, 193, 255, 0.85);
+  flex-shrink: 0;
+}
+
+.don-core-dot--orange {
+  background: var(--don-orange);
+  box-shadow: 0 0 10px rgba(255, 90, 31, 0.85);
+}
+
+/* --------------------------------------------------------------------------
+   2. SPLIT-FRAME TELEMETRY CARD (.don-card-split)
+   Thick solid top-left + bottom-right rails, hollow hairline opposite sides
+   -------------------------------------------------------------------------- */
+.don-card-split {
+  position: relative;
+  background: linear-gradient(160deg, rgba(21, 28, 40, 0.92), rgba(9, 12, 17, 0.98));
+  border: 1px solid var(--don-line);
+  border-radius: 16px 4px 16px 4px;
+  padding: 1.65rem;
+  overflow: hidden;
+}
+
+/* Thick solid top-left L-cap */
+.don-card-split::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--don-ink) 0%, var(--don-ice) 100%);
+}
+
+/* Thick solid bottom-right L-cap */
+.don-card-split::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 34%;
+  height: 4px;
+  background: var(--don-orange);
+}
+
+.don-card-split__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.don-card-split__index {
+  font-family: var(--don-font-mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--don-ink);
+}
+
+.don-card-split__index span {
+  color: var(--don-orange);
+  margin: 0 0.35rem;
+}
+
+.don-card-split__title {
+  font-family: var(--don-font-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  margin: 0 0 0.55rem;
+  color: #ffffff;
+}
+
+.don-card-split__body {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--don-muted);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   3. DOTTED-O CORE TOGGLE (.don-toggle-core)
+   Split solid/hollow pill inspired by the 'O' glyph with glowing center dot
+   -------------------------------------------------------------------------- */
+.don-toggle-core {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--don-font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--don-ink);
+}
+
+.don-toggle-core input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.don-toggle-core__track {
+  position: relative;
+  width: 58px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1.5px solid var(--don-line-strong);
+  background:
+    linear-gradient(90deg, rgba(243, 245, 249, 0.14) 0 48%, transparent 48% 100%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.don-toggle-core__thumb {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--don-ink);
+  display: grid;
+  place-items: center;
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.2s ease;
+}
+
+.don-toggle-core__thumb::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--don-muted);
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.don-toggle-core input:checked + .don-toggle-core__track {
+  border-color: var(--don-ice);
+  box-shadow: 0 0 18px rgba(63, 193, 255, 0.22);
+}
+
+.don-toggle-core input:checked + .don-toggle-core__track .don-toggle-core__thumb {
+  transform: translateX(28px);
+  border-color: var(--don-ice);
+}
+
+.don-toggle-core input:checked + .don-toggle-core__track .don-toggle-core__thumb::after {
+  background: var(--don-ice);
+  box-shadow: 0 0 10px rgba(63, 193, 255, 0.95);
+}
+
+/* --------------------------------------------------------------------------
+   4. SEGMENTED STENCIL STEPPER (.don-stepper)
+   5-slice architectural stepper with half-solid / half-hollow nodes
+   -------------------------------------------------------------------------- */
+.don-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.don-step {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.95rem;
+  border: 1px solid var(--don-line);
+  border-radius: 8px 2px 8px 2px;
+  font-family: var(--don-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--don-muted);
+  background: rgba(15, 20, 29, 0.7);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.don-step__ring {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--don-muted);
+  border-top-color: transparent;
+  display: grid;
+  place-items: center;
+}
+
+.don-step__ring::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.don-step.is-active {
+  color: #ffffff;
+  border-color: var(--don-ice);
+  background: linear-gradient(90deg, rgba(63, 193, 255, 0.14) 0 42%, rgba(15, 20, 29, 0.9) 42%);
+}
+
+.don-step.is-active .don-step__ring {
+  border-color: var(--don-ice);
+  border-left-width: 3px;
+}
+
+.don-step.is-active .don-step__ring::after {
+  background: var(--don-orange);
+  box-shadow: 0 0 8px var(--don-orange);
+}
+
+/* --------------------------------------------------------------------------
+   5. STENCIL INPUT & BLIND-VAULT FIELD (.don-input-stencil)
+   -------------------------------------------------------------------------- */
+.don-input-stencil {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid var(--don-line-strong);
+  border-radius: 10px 2px 10px 2px;
+  background: #070a0f;
+  overflow: hidden;
+  max-width: 480px;
+}
+
+.don-input-stencil::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 38%;
+  height: 3px;
+  background: var(--don-ice);
+}
+
+.don-input-stencil input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-family: var(--don-font-mono);
+  font-size: 0.85rem;
+  padding: 0.9rem 1rem;
+  outline: none;
+}
+
+.don-input-stencil input::placeholder {
+  color: rgba(142, 153, 171, 0.65);
+}
+
+.don-input-stencil button {
+  border: none;
+  border-left: 1px solid var(--don-line);
+  background: linear-gradient(180deg, #f4f6fa 0%, #c5ccd6 100%);
+  color: #090c11;
+  font-family: var(--don-font-mono);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0 1.25rem;
+  cursor: pointer;
+  transition: filter 0.18s ease;
+}
+
+.don-input-stencil button:hover {
+  filter: brightness(1.08);
+}
+
+/* --------------------------------------------------------------------------
+   6. SPLIT-GEOMETRY GATE APPROVAL BANNER (.don-gate-banner)
+   -------------------------------------------------------------------------- */
+.don-gate-banner {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--don-surface);
+  border: 1.5px solid rgba(255, 90, 31, 0.55);
+  border-radius: 14px 2px 14px 2px;
+}
+
+.don-gate-banner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 140px;
+  height: 4px;
+  background: var(--don-orange);
+}
+
+.don-gate-banner__tag {
+  font-family: var(--don-font-mono);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--don-orange);
+  text-transform: uppercase;
+}
+
+.don-gate-banner__msg {
+  font-size: 0.95rem;
+  color: #ffffff;
+  margin: 0.25rem 0 0;
+}
