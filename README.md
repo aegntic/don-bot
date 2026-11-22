@@ -98,7 +98,7 @@ bun run don guard block --dir /path/to/your-repo
 | **Slice 02** | Multi-turn live repo coding loop & remote runner integration | Planned |
 | **Slice 03** | Rust `crates/don-guard` native OS sandbox + Trust-Jev owner-quote calibration | Planned |
 | **Slice 04** | Telegram MTProto (`@mtcute/node`) operator channel (`packages/channels`) | Planned |
-| **Slice 05** | Lean spring-liquid PWA Cockpit (`packages/ui`) + Decision Deck UI | Planned |
+| **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + Spring-Liquid PWA Cockpit (`packages/ui`) | Planned |
 
 ---
 
