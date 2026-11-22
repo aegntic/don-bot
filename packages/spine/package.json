@@ -10,7 +10,9 @@
   "dependencies": {
     "@don-bot/trust": "workspace:*",
     "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
     "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/pi-schema": "1.6.0",
     "yaml": "^2.8.0"
   }
 }
