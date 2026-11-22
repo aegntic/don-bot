@@ -124,6 +124,13 @@ export function writeDefaultDonConfig(
   return target;
 }
 
+export function saveDonConfig(donDir: string, config: DonConfig): string {
+  mkdirSync(donDir, { recursive: true });
+  const target = join(donDir, 'config.yaml');
+  writeFileSync(target, YAML.stringify(config), 'utf8');
+  return target;
+}
+
 const BYOK_ENV_ORDER: ReadonlyArray<{ envVar: string; provider: BuiltinProvider }> = [
   { envVar: 'ANTHROPIC_API_KEY', provider: 'anthropic' },
   { envVar: 'OPENAI_API_KEY', provider: 'openai' },
