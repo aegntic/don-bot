@@ -1,0 +1,48 @@
+# Don-Bot Configuration Template (Slice 01)
+# Copy to .don/config.yaml or run `don init` to generate automatically.
+
+models:
+  # 4 vendor-agnostic model tiers.
+  # With 1 API key set (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY),
+  # unspecified tiers fall back automatically to that provider's mapped defaults.
+  architect:
+    provider: auto
+    model: auto
+    thinking: high
+  workhorse:
+    provider: auto
+    model: auto
+    thinking: medium
+  fast:
+    provider: auto
+    model: auto
+    thinking: low
+  gate:
+    provider: auto
+    model: auto
+    thinking: minimal
+
+budgets:
+  subagentMaxUsd: 0.25
+  subagentMaxMinutes: 5
+  taskMaxUsd: 2.00
+  taskDownshiftPct: 70
+  dailyMaxUsd: 15.00
+
+compaction:
+  noticePct: 10
+  warningPct: 20
+  forcedPct: 30
+
+safeagents:
+  enabled: true
+  port: 8787
+  # Default to log-only on initial onboarding; switch to "block" for active interception.
+  mode: log-only
+  upstream: auto
+
+team:
+  debateMode: complexity-gated
+  maxConsecutiveFailures: 2
+  maxVerifierLoops: 3
+  worktreeDir: .don/worktrees

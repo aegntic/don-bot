@@ -1,0 +1,16 @@
+{
+  "name": "@don-bot/spine",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@don-bot/trust": "workspace:*",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
+    "yaml": "^2.8.0"
+  }
+}

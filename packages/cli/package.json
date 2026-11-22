@@ -1,0 +1,18 @@
+{
+  "name": "@don-bot/cli",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "bin": {
+    "don": "./src/index.ts"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@don-bot/spine": "workspace:*",
+    "@don-bot/team": "workspace:*",
+    "@don-bot/trust": "workspace:*"
+  }
+}

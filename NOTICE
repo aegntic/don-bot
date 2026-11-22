@@ -1,0 +1,15 @@
+Don-Bot (On-the-Run Dark Factory)
+Copyright 2026 aegntic.ai
+
+This product includes software and security modules selectively adapted from
+n8n-io/nod (Copyright 2026 n8n GmbH, Apache-2.0):
+  - Untrusted tool output delimiter and tag neutralization
+  - SSRF public IPv4/loopback address guards
+  - Turn lock, cancellation, and withdrawn-turn authority guards
+  - Calibrated JEV trust policy and time/effect checks
+
+Durable checkpointing and task orchestration build on:
+  - @earendil-works/pi-durable and @earendil-works/chord (Earendil Works)
+
+Multi-agent room and factory workflow patterns inspired by:
+  - Tiny Software Factories (github.com/disler)
