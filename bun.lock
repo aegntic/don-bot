@@ -29,9 +29,11 @@
         "don": "./src/index.ts",
       },
       "dependencies": {
+        "@don-bot/channels": "workspace:*",
         "@don-bot/spine": "workspace:*",
         "@don-bot/team": "workspace:*",
         "@don-bot/trust": "workspace:*",
+        "@don-bot/ui": "workspace:*",
       },
     },
     "packages/spine": {
@@ -61,6 +63,12 @@
     "packages/ui": {
       "name": "@don-bot/ui",
       "version": "0.1.0-alpha.0",
+      "dependencies": {
+        "@don-bot/channels": "workspace:*",
+        "@don-bot/spine": "workspace:*",
+        "@don-bot/team": "workspace:*",
+        "@don-bot/trust": "workspace:*",
+      },
     },
   },
   "packages": {

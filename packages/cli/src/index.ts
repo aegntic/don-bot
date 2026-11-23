@@ -2,10 +2,19 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
+  buildCloudflaredCommand,
+  buildTailscaleServeCommand,
+  detectRemoteTunnelTools,
+  loadExclusionsFile,
+  TelegramClient,
+} from '@don-bot/channels';
+import {
   BACKGROUND_CONTEXT,
+  createRollbackCheckpoint,
   type DonConfig,
   type DonDatabase,
   listDecisionCards,
+  listRollbackCheckpoints,
   listSkillEvalRuns,
   loadDonConfig,
   openDonDb,
@@ -23,16 +32,21 @@ import {
   runTeamGoal,
 } from '@don-bot/team';
 import {
+  BlindVault,
+  BlindVaultError,
   detectSafeAgentsBinary,
   detectSkillEvaluatorBinary,
   discoverSkillDirs,
+  donGuardHealth,
   ensureAccessKey,
   getSafeAgentsInstallCommand,
   getSkillEvaluatorInstallCommand,
   runSkillHarnessCheck,
   type SkillEvaluatorTier,
   type SkillHarnessCheckResult,
+  type VaultSecretKind,
 } from '@don-bot/trust';
+import { startCockpitServer } from '@don-bot/ui';
 
 export interface CliIo {
   readonly stdout?: (line: string) => void;
@@ -64,9 +78,14 @@ function renderHelp(): string {
     '  init                             Create .don/factory.sqlite, access-key, .gitignore, config.yaml',
     '  run "<goal>"                     Execute single-lane task cleanly (bypasses debate room)',
     '  team "<goal>"                    Execute Lead + Specialist goal (complexity-gated debate room)',
+    '  serve                            Start local A2UI v1.0 / SSE 3-pane cockpit server',
     '  status                           Show SQLite WAL, safeagents, budget caps, queue & worktree status',
     '  resume                           Inspect paused/interrupted tasks, once() memos & Decision Deck cards',
-    '  guard <status|block|log-only|install>   Inspect or toggle safeagents firewall mode',
+    '  guard <status|rust-status|block|log-only|install>   Inspect or toggle security guard modes',
+    '  vault <set|list>                 Store or inspect Blind Vault credentials (never echoes secrets)',
+    '  rollback <create|list>           Create or list HMAC-signed git+SQLite rollback checkpoints',
+    '  channel status                   Inspect Telegram Me Mode (@mtcute/bun) & EXCLUSIONS.txt',
+    '  tunnel <tailscale|cloudflared>   Print zero-port remote access command & tool detection',
     '  skills <status|eval|harness|history|block|log-only|install>  Run core NVIDIA SkillEvaluator checks',
     '  worktree gc                      Prune merged or stale specialist git worktrees',
     '  test:crash                       Run Chaos Test 1 (real SIGKILL + once() recovery)',
@@ -75,6 +94,13 @@ function renderHelp(): string {
     '  --dir <path>                     Target repository directory (default: cwd)',
     '  --faux                           Use deterministic offline scripted provider',
     '  --role <roleId>                  Override active role (lead|api-keeper|pipeline-forge|client-qa|memory-curator)',
+    '  --port <number>                  Server or tunnel port (default: 4321)',
+    '  --host <addr>                    Server bind host (default: 127.0.0.1)',
+    '  --name <secretName>              Blind Vault secret name',
+    '  --kind <secretKind>              Blind Vault kind (api_key|oauth_token|git_ssh_key|staging_login)',
+    '  --value <secretValue>            Blind Vault secret plaintext (never printed back)',
+    '  --hosts <csvHosts>               Allowed outbound hostnames (comma-separated)',
+    '  --task <taskId>                  Task identifier for rollback checkpoints',
     '  --tiers <list>                   SkillEvaluator tiers (e.g. 1, 1,2, 1,2,3)',
     '  --min-score <0-100>              Minimum SkillEvaluator Tier 1 quality score',
     '  --json                           Emit machine-readable JSON output',
@@ -155,6 +181,13 @@ export async function runCli(
       dir: { type: 'string' },
       faux: { type: 'boolean', default: false },
       role: { type: 'string' },
+      port: { type: 'string' },
+      host: { type: 'string' },
+      name: { type: 'string' },
+      kind: { type: 'string' },
+      value: { type: 'string' },
+      hosts: { type: 'string' },
+      task: { type: 'string' },
       tiers: { type: 'string' },
       'min-score': { type: 'string' },
       json: { type: 'boolean', default: false },
@@ -443,6 +476,23 @@ export async function runCli(
       return 0;
     }
 
+    if (action === 'rust-status') {
+      const health = await donGuardHealth();
+      emitResult(
+        asJson,
+        health,
+        [
+          'don-guard Rust binary status',
+          `  ok:      ${health.ok}`,
+          `  binary:  ${health.binaryPath ?? 'not built (run: cargo build --release --manifest-path crates/don-guard/Cargo.toml)'}`,
+          `  backend: ${health.backend ?? 'unavailable'}`,
+          ...(health.error ? [`  error:   ${health.error}`] : []),
+        ],
+        out,
+      );
+      return health.ok ? 0 : 1;
+    }
+
     if (action === 'block' || action === 'log-only') {
       const config = loadDonConfig(dir);
       const updated: DonConfig = {
@@ -481,7 +531,7 @@ export async function runCli(
 
     writeLine(
       errOut,
-      `Unknown guard subcommand "${action}". Expected: status, block, log-only, install`,
+      `Unknown guard subcommand "${action}". Expected: status, rust-status, block, log-only, install`,
     );
     return 2;
   }
@@ -727,6 +777,298 @@ export async function runCli(
       writeLine(errOut, err instanceof Error ? err.message : String(err));
       return 1;
     }
+  }
+
+  if (command === 'serve') {
+    const host =
+      typeof parsed.values.host === 'string' && parsed.values.host.trim()
+        ? parsed.values.host.trim()
+        : '127.0.0.1';
+    let port = 4321;
+    if (typeof parsed.values.port === 'string' && parsed.values.port.trim()) {
+      if (!/^\d+$/.test(parsed.values.port.trim())) {
+        writeLine(errOut, `Invalid --port "${parsed.values.port}". Expected non-negative integer.`);
+        return 2;
+      }
+      port = Number.parseInt(parsed.values.port.trim(), 10);
+    }
+
+    const handle = startCockpitServer({ dir, host, port });
+    const accessKeyPath = join(donDir, 'access-key');
+    const tunnelHint = buildTailscaleServeCommand(handle.port, handle.host);
+    emitResult(
+      asJson,
+      {
+        ok: true,
+        url: handle.url,
+        host: handle.host,
+        port: handle.port,
+        accessKeyPath,
+        tunnelHint,
+      },
+      [
+        `Don-Bot Cockpit listening at ${handle.url}`,
+        `  access-key: ${accessKeyPath} (present; secret omitted)`,
+        `  remote:     ${tunnelHint}`,
+      ],
+      out,
+    );
+
+    await new Promise<void>((resolveStop) => {
+      const shutdown = () => {
+        process.off('SIGINT', shutdown);
+        process.off('SIGTERM', shutdown);
+        resolveStop();
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+    });
+    await handle.stop();
+    return 0;
+  }
+
+  if (command === 'vault') {
+    const action = rest[0] ?? 'list';
+    if (action === 'set') {
+      const name = typeof parsed.values.name === 'string' ? parsed.values.name.trim() : '';
+      const value = typeof parsed.values.value === 'string' ? parsed.values.value : '';
+      const hostsRaw = typeof parsed.values.hosts === 'string' ? parsed.values.hosts : '';
+      const kindRaw =
+        typeof parsed.values.kind === 'string' && parsed.values.kind.trim()
+          ? parsed.values.kind.trim()
+          : 'api_key';
+
+      const validKinds: readonly VaultSecretKind[] = [
+        'api_key',
+        'oauth_token',
+        'git_ssh_key',
+        'staging_login',
+        'card',
+      ];
+      if (!validKinds.includes(kindRaw as VaultSecretKind)) {
+        writeLine(
+          errOut,
+          `Invalid --kind "${kindRaw}". Expected one of: api_key, oauth_token, git_ssh_key, staging_login`,
+        );
+        return 2;
+      }
+      if (!name || !value || !hostsRaw.trim()) {
+        writeLine(
+          errOut,
+          'Usage: don vault set --name <name> --kind <kind> --value <secret> --hosts <h1,h2>',
+        );
+        return 2;
+      }
+
+      const allowedHosts = hostsRaw
+        .split(',')
+        .map((h) => h.trim())
+        .filter(Boolean);
+      const db = openDonDb(dbPath);
+      try {
+        const vault = new BlindVault({ db: db.raw, donDir });
+        const summary = await vault.setSecret({
+          name,
+          kind: kindRaw as VaultSecretKind,
+          value,
+          allowedHosts,
+        });
+        emitResult(
+          asJson,
+          { ok: true, item: summary },
+          [
+            `Stored Blind Vault credential "${summary.name}" (secret redacted)`,
+            `  refId:        ${summary.refId}`,
+            `  kind:         ${summary.kind}`,
+            `  allowedHosts: ${summary.allowedHosts.join(', ')}`,
+          ],
+          out,
+        );
+        return 0;
+      } catch (err) {
+        if (err instanceof BlindVaultError) {
+          if (asJson) {
+            out(JSON.stringify({ ok: false, code: err.code, error: err.message }, null, 2));
+          } else {
+            writeLine(errOut, `[vault:${err.code}] ${err.message}`);
+          }
+          return 1;
+        }
+        throw err;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'list') {
+      if (!existsSync(dbPath)) {
+        emitResult(asJson, { items: [] }, ['No Blind Vault items stored yet.'], out);
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const vault = new BlindVault({ db: db.raw, donDir });
+        const items = vault.listSecrets();
+        emitResult(
+          asJson,
+          { items },
+          items.length === 0
+            ? ['Blind Vault is empty.']
+            : [
+                `Blind Vault credentials (${items.length}):`,
+                ...items.map(
+                  (item) =>
+                    `  - ${item.refId} name=${item.name} kind=${item.kind} hosts=[${item.allowedHosts.join(', ')}]`,
+                ),
+              ],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    writeLine(errOut, `Unknown vault subcommand "${action}". Expected: set, list`);
+    return 2;
+  }
+
+  if (command === 'rollback') {
+    const action = rest[0] ?? 'list';
+    const taskId =
+      typeof parsed.values.task === 'string' && parsed.values.task.trim()
+        ? parsed.values.task.trim()
+        : undefined;
+
+    if (action === 'create') {
+      const db = openDonDb(dbPath);
+      try {
+        const checkpoint = createRollbackCheckpoint(db, {
+          repoDir: dir,
+          donDir,
+          taskId: taskId ?? 'manual-checkpoint',
+        });
+        emitResult(
+          asJson,
+          { ok: true, checkpoint },
+          [
+            `Created signed rollback checkpoint ${checkpoint.id}`,
+            `  taskId: ${checkpoint.taskId}`,
+            `  gitRef: ${checkpoint.gitRef}`,
+            `  dbSeq:  ${checkpoint.dbSeq}`,
+          ],
+          out,
+        );
+        return 0;
+      } catch (err) {
+        writeLine(errOut, err instanceof Error ? err.message : String(err));
+        return 1;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'list') {
+      if (!existsSync(dbPath)) {
+        emitResult(asJson, { checkpoints: [] }, ['No rollback checkpoints yet.'], out);
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const checkpoints = listRollbackCheckpoints(db, taskId);
+        emitResult(
+          asJson,
+          { checkpoints },
+          checkpoints.length === 0
+            ? ['No rollback checkpoints recorded.']
+            : [
+                `Rollback checkpoints (${checkpoints.length}):`,
+                ...checkpoints.map(
+                  (cp) =>
+                    `  - ${cp.id} task=${cp.taskId} ref=${cp.gitRef} dbSeq=${cp.dbSeq} status=${cp.status}`,
+                ),
+              ],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    writeLine(errOut, `Unknown rollback subcommand "${action}". Expected: create, list`);
+    return 2;
+  }
+
+  if (command === 'tunnel') {
+    const provider = rest[0] ?? 'tailscale';
+    if (provider !== 'tailscale' && provider !== 'cloudflared') {
+      writeLine(errOut, `Unknown tunnel provider "${provider}". Expected: tailscale, cloudflared`);
+      return 2;
+    }
+    const host =
+      typeof parsed.values.host === 'string' && parsed.values.host.trim()
+        ? parsed.values.host.trim()
+        : '127.0.0.1';
+    const port =
+      typeof parsed.values.port === 'string' && /^\d+$/.test(parsed.values.port.trim())
+        ? Number.parseInt(parsed.values.port.trim(), 10)
+        : 4321;
+    const tools = detectRemoteTunnelTools();
+    const binaryPath = provider === 'tailscale' ? tools.tailscale : tools.cloudflared;
+    const cmd =
+      provider === 'tailscale'
+        ? buildTailscaleServeCommand(port, host)
+        : buildCloudflaredCommand(port, host);
+    emitResult(
+      asJson,
+      {
+        provider,
+        installed: Boolean(binaryPath),
+        binaryPath,
+        command: cmd,
+      },
+      [
+        `Zero-port remote tunnel (${provider}):`,
+        `  binary:  ${binaryPath ?? 'not installed on PATH'}`,
+        `  command: ${cmd}`,
+      ],
+      out,
+    );
+    return 0;
+  }
+
+  if (command === 'channel') {
+    const action = rest[0] ?? 'status';
+    if (action !== 'status') {
+      writeLine(errOut, `Unknown channel subcommand "${action}". Expected: status`);
+      return 2;
+    }
+    const exclusionsPath = join(donDir, 'EXCLUSIONS.txt');
+    const exclusions = loadExclusionsFile(exclusionsPath);
+    const tunnels = detectRemoteTunnelTools();
+    const driverAvailable = typeof TelegramClient === 'function';
+    const payload = {
+      driver: '@mtcute/bun',
+      driverAvailable,
+      exclusionsPath,
+      exclusionsExists: existsSync(exclusionsPath),
+      exclusionCount: exclusions.size,
+      remoteTunnels: tunnels,
+    };
+    emitResult(
+      asJson,
+      payload,
+      [
+        'Channel status (Telegram Me Mode)',
+        `  driver:          ${payload.driver} (available=${payload.driverAvailable})`,
+        `  EXCLUSIONS.txt:  ${payload.exclusionsExists ? `${payload.exclusionCount} entries` : 'not configured'} (${exclusionsPath})`,
+        `  tailscale:       ${tunnels.tailscale ?? 'not found'}`,
+        `  cloudflared:     ${tunnels.cloudflared ?? 'not found'}`,
+      ],
+      out,
+    );
+    return 0;
   }
 
   if (command === 'test:crash') {
