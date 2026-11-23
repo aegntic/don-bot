@@ -73,6 +73,7 @@ export function renderCockpitHtml(): string {
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
 
     html, body {
       margin: 0;
