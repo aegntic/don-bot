@@ -47,6 +47,7 @@ import {
   type DonConfig,
   type ModelTier,
 } from './config.ts';
+import { VaultCredentialStore } from './credentials.ts';
 import { openDonDb, type DonDatabase } from './db.ts';
 import { appendEvent, INTERRUPTED_TOOL_MESSAGE } from './events.ts';
 
@@ -88,6 +89,7 @@ export interface DonSpineRuntime {
   readonly config: DonConfig;
   readonly faux?: FauxProviderHandle;
   readonly jevClient: JevDecisionPort | null;
+  readonly credentials: VaultCredentialStore;
   updateContextTokens(conversationId: number, usedTokens: number): void;
   setContextWindow(conversationId: number, contextWindow: number): void;
   setTaskContext(conversationId: number, ctx: TaskBudgetContext): void;
@@ -96,8 +98,11 @@ export interface DonSpineRuntime {
   close(): Promise<void>;
 }
 
-function buildDefaultModels(fauxHandle?: FauxProviderHandle): MutableModels {
-  const models = createModels();
+function buildDefaultModels(
+  fauxHandle?: FauxProviderHandle,
+  credentials?: VaultCredentialStore,
+): MutableModels {
+  const models = createModels(credentials ? { credentials } : undefined);
   if (fauxHandle) {
     models.setProvider(fauxHandle.provider);
   }
@@ -128,8 +133,10 @@ function computeUsageCostUsd(
 export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpineRuntime> {
   const cwd =
     options.cwd ?? (options.dbPath === ':memory:' ? process.cwd() : dirname(options.dbPath));
+  const donDir = options.dbPath === ':memory:' ? join(cwd, '.don') : dirname(options.dbPath);
   const config = options.config ?? loadDonConfig(cwd);
   const db = openDonDb(options.dbPath);
+  const credentialStore = new VaultCredentialStore({ db: db.raw, donDir });
 
   const storagePath =
     options.dbPath === ':memory:'
@@ -143,7 +150,7 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
 
   const fauxHandle =
     options.fauxProvider ?? (options.faux ? fauxProvider({ provider: 'faux' }) : undefined);
-  const models = options.models ?? buildDefaultModels(fauxHandle);
+  const models = options.models ?? buildDefaultModels(fauxHandle, credentialStore);
   const registry = createRegistry();
 
   const contextTokens = new Map<number, number>();
@@ -153,9 +160,11 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
   const defaultWindow = options.defaultContextWindow ?? 128_000;
   const authorizedHosts = new Set(options.ownerAuthorizedHosts ?? []);
   const inspectionMode = options.safeAgentsMode ?? config.safeagents.mode;
+  const vaultKeys = await credentialStore.resolveJevApiKeys();
   const activeJevClient = resolveConfiguredJevClient(config, {
     faux: options.faux,
     overrideClient: options.jevClient,
+    vaultKeys,
   });
   const readOnlyToolSet = new Set([
     'self_compact',
@@ -436,6 +445,7 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
     config,
     ...(fauxHandle ? { faux: fauxHandle } : {}),
     jevClient: activeJevClient,
+    credentials: credentialStore,
     updateContextTokens(conversationId, usedTokens) {
       contextTokens.set(conversationId, usedTokens);
     },

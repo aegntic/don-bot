@@ -219,6 +219,14 @@ CREATE TABLE IF NOT EXISTS don_shadow_tools (
   promoted_at INTEGER,
   observations INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS don_provider_credentials (
+  provider_id TEXT PRIMARY KEY,
+  cred_type TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  source TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 export class DonDatabase {

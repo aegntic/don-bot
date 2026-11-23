@@ -63,6 +63,49 @@ function deriveVaultKey(donDir: string): Buffer {
   return createHash('sha256').update('don-blind-vault:').update(accessKey).digest();
 }
 
+/**
+ * Seal an arbitrary UTF-8 secret with Rust `don-guard` (or AES-256-GCM fallback)
+ * bound to `.don/access-key` and explicit AAD binding tags.
+ */
+export async function sealProtectedBlob(
+  donDir: string,
+  binding: readonly string[],
+  plaintext: string,
+  binaryPath?: string | null,
+): Promise<string> {
+  const key = deriveVaultKey(donDir);
+  const rustBin = detectDonGuardBinary(binaryPath);
+  if (rustBin) {
+    const sealed = await donGuardVaultSeal(key.toString('base64'), binding, plaintext, rustBin);
+    if (!sealed.ok || !sealed.ciphertext) {
+      throw new BlindVaultError('CRYPTO_ERROR', sealed.error ?? 'don-guard seal failed');
+    }
+    return sealed.ciphertext;
+  }
+  return sealVaultValueNode(key, binding, plaintext);
+}
+
+/**
+ * Open an encrypted vault blob sealed by `sealProtectedBlob` using exact AAD binding tags.
+ */
+export async function openProtectedBlob(
+  donDir: string,
+  binding: readonly string[],
+  ciphertext: string,
+  binaryPath?: string | null,
+): Promise<string> {
+  const key = deriveVaultKey(donDir);
+  const rustBin = detectDonGuardBinary(binaryPath);
+  if (rustBin) {
+    const opened = await donGuardVaultOpen(key.toString('base64'), binding, ciphertext, rustBin);
+    if (!opened.ok || opened.plaintext === undefined) {
+      throw new BlindVaultError('CRYPTO_ERROR', opened.error ?? 'don-guard open failed');
+    }
+    return opened.plaintext;
+  }
+  return openVaultValueNode(key, binding, ciphertext);
+}
+
 export function sealVaultValueNode(
   key: Buffer,
   binding: readonly string[],
@@ -149,19 +192,7 @@ export class BlindVault {
 
     const refId = `vault:${randomUUID().slice(0, 12)}`;
     const binding = [refId, input.name, input.kind];
-    const key = deriveVaultKey(this.donDir);
-
-    let ciphertext: string;
-    const rustBin = detectDonGuardBinary(this.binaryPath);
-    if (rustBin) {
-      const sealed = await donGuardVaultSeal(key.toString('base64'), binding, input.value, rustBin);
-      if (!sealed.ok || !sealed.ciphertext) {
-        throw new BlindVaultError('CRYPTO_ERROR', sealed.error ?? 'don-guard seal failed');
-      }
-      ciphertext = sealed.ciphertext;
-    } else {
-      ciphertext = sealVaultValueNode(key, binding, input.value);
-    }
+    const ciphertext = await sealProtectedBlob(this.donDir, binding, input.value, this.binaryPath);
 
     const createdAt = Date.now();
     this.db
@@ -261,24 +292,13 @@ export class BlindVault {
       );
     }
 
-    const key = deriveVaultKey(this.donDir);
     const binding = [row.ref_id, row.name, row.kind];
-
-    let plaintext: string;
-    if (rustBin) {
-      const opened = await donGuardVaultOpen(
-        key.toString('base64'),
-        binding,
-        row.ciphertext,
-        rustBin,
-      );
-      if (!opened.ok || opened.plaintext === undefined) {
-        throw new BlindVaultError('CRYPTO_ERROR', opened.error ?? 'don-guard open failed');
-      }
-      plaintext = opened.plaintext;
-    } else {
-      plaintext = openVaultValueNode(key, binding, row.ciphertext);
-    }
+    const plaintext = await openProtectedBlob(
+      this.donDir,
+      binding,
+      row.ciphertext,
+      this.binaryPath,
+    );
 
     this.knownSecrets.add(plaintext);
     return plaintext;

@@ -13,6 +13,7 @@ import {
   createRollbackCheckpoint,
   type DonConfig,
   type DonDatabase,
+  getOnboardingStatus,
   listDecisionCards,
   listRollbackCheckpoints,
   listSkillEvalRuns,
@@ -20,8 +21,16 @@ import {
   openDonDb,
   openDonSpine,
   saveDonConfig,
+  VaultCredentialStore,
   writeDefaultDonConfig,
 } from '@don-bot/spine';
+import {
+  ensureWorkspaceInitialized,
+  formatOnboardingSummaryLines,
+  promptMaskedSecret,
+  runCliOAuthLogin,
+  runInteractiveOnboarding,
+} from './onboard.ts';
 import {
   type AgentRoleId,
   DEFAULT_ROSTER,
@@ -79,9 +88,12 @@ function renderHelp(): string {
     '',
     'Commands:',
     '  init                             Create .don/factory.sqlite, access-key, .gitignore, config.yaml',
+    '  onboard                          Guided setup: 1-click OAuth AI brain, System-One Jev & Blind Vault',
+    '  login [provider]                 Run OAuth PKCE / Device Code sign-in (default: openrouter)',
+    '  auth <status|set|logout>         Inspect, encrypt, or remove provider credentials in SQLite',
     '  run "<goal>"                     Execute single-lane task cleanly (bypasses debate room)',
     '  team "<goal>"                    Execute Lead + Specialist goal (complexity-gated debate room)',
-    '  serve                            Start local A2UI v1.0 / SSE 3-pane cockpit server',
+    '  serve                            Start local A2UI v1.0 / SSE 3-pane cockpit server + pairing code',
     '  status                           Show SQLite WAL, safeagents, budget caps, queue & worktree status',
     '  resume                           Inspect paused/interrupted tasks, once() memos & Decision Deck cards',
     '  guard <status|rust-status|jev-status|block|log-only|install>   Inspect or toggle security guard modes',
@@ -97,6 +109,9 @@ function renderHelp(): string {
     '  --dir <path>                     Target repository directory (default: cwd)',
     '  --faux                           Use deterministic offline scripted provider',
     '  --role <roleId>                  Override active role (lead|api-keeper|pipeline-forge|client-qa|memory-curator)',
+    '  --provider <id>                  Provider ID for auth set/logout (openrouter|anthropic|openai|google|typesafe)',
+    '  --key <secret>                   API key for auth set (never printed back; prompts masked if omitted in TTY)',
+    '  --non-interactive                Run onboard without interactive terminal prompts',
     '  --port <number>                  Server or tunnel port (default: 4321)',
     '  --host <addr>                    Server bind host (default: 127.0.0.1)',
     '  --name <secretName>              Blind Vault secret name',
@@ -184,6 +199,9 @@ export async function runCli(
       dir: { type: 'string' },
       faux: { type: 'boolean', default: false },
       role: { type: 'string' },
+      provider: { type: 'string' },
+      key: { type: 'string' },
+      'non-interactive': { type: 'boolean', default: false },
       port: { type: 'string' },
       host: { type: 'string' },
       name: { type: 'string' },
@@ -260,10 +278,129 @@ export async function runCli(
         `  database:   ${dbPath} (journal_mode=${journalMode})`,
         `  config:     ${configPath}`,
         `  access-key: ${join(donDir, 'access-key')} (present; secret omitted)`,
+        '  next step:  run "don onboard" for 1-click OAuth & encrypted key setup',
       ],
       out,
     );
     return 0;
+  }
+
+  if (command === 'onboard') {
+    await runInteractiveOnboarding({
+      dir,
+      io: { stdout: out, stderr: errOut },
+      nonInteractive: Boolean(parsed.values['non-interactive']),
+      asJson,
+    });
+    return 0;
+  }
+
+  if (command === 'login') {
+    const providerId =
+      rest[0] ??
+      (typeof parsed.values.provider === 'string' ? parsed.values.provider.trim() : 'openrouter');
+    try {
+      const result = await runCliOAuthLogin({
+        dir,
+        providerId,
+        io: { stdout: out, stderr: errOut },
+      });
+      if (asJson) {
+        out(JSON.stringify(result, null, 2));
+      }
+      return 0;
+    } catch (err) {
+      writeLine(errOut, err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+  }
+
+  if (command === 'auth') {
+    const action = rest[0] ?? 'status';
+
+    if (action === 'status') {
+      const status = await getOnboardingStatus({ dir });
+      emitResult(asJson, status, formatOnboardingSummaryLines(status), out);
+      return 0;
+    }
+
+    if (action === 'set') {
+      const providerId =
+        typeof parsed.values.provider === 'string' && parsed.values.provider.trim()
+          ? parsed.values.provider.trim()
+          : (rest[1] ?? '');
+      if (!providerId) {
+        writeLine(errOut, 'Usage: don auth set --provider <providerId> [--key <apiKey>]');
+        return 2;
+      }
+
+      let secret = typeof parsed.values.key === 'string' ? parsed.values.key.trim() : '';
+      if (!secret && process.stdin.isTTY && process.stdout.isTTY) {
+        secret = await promptMaskedSecret(`Paste ${providerId} API key (masked): `);
+      }
+      if (!secret) {
+        writeLine(errOut, 'Missing non-empty --key secret for "don auth set".');
+        return 2;
+      }
+
+      const initInfo = ensureWorkspaceInitialized(dir);
+      const db = openDonDb(initInfo.dbPath);
+      try {
+        const store = new VaultCredentialStore({ db: db.raw, donDir: initInfo.donDir });
+        await store.setApiKey(providerId, secret, 'cli');
+        const status = await getOnboardingStatus({ dir, db });
+        emitResult(
+          asJson,
+          { ok: true, providerId, brainReady: status.brainReady, jevReady: status.jevReady },
+          [
+            `Encrypted credential stored for "${providerId}" (secret omitted)`,
+            `  ai brain:     ${status.brainReady ? `${status.activeBrainProvider} (${status.activeBrainSource})` : 'not connected'}`,
+            `  system-1 jev: ${status.jevReady ? `${status.jevProvider} (${status.jevSource})` : 'standby'}`,
+          ],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'logout') {
+      const providerId =
+        typeof parsed.values.provider === 'string' && parsed.values.provider.trim()
+          ? parsed.values.provider.trim()
+          : (rest[1] ?? '');
+      if (!providerId) {
+        writeLine(errOut, 'Usage: don auth logout --provider <providerId>');
+        return 2;
+      }
+      if (!existsSync(dbPath)) {
+        emitResult(
+          asJson,
+          { ok: true, providerId, removed: false },
+          [`No credentials stored yet.`],
+          out,
+        );
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const store = new VaultCredentialStore({ db: db.raw, donDir });
+        await store.delete(providerId);
+        emitResult(
+          asJson,
+          { ok: true, providerId, removed: true },
+          [`Removed encrypted credential for "${providerId}".`],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    writeLine(errOut, `Unknown auth subcommand "${action}". Expected: status, set, logout`);
+    return 2;
   }
 
   if (command === 'status') {
@@ -848,11 +985,13 @@ export async function runCli(
         url: handle.url,
         host: handle.host,
         port: handle.port,
+        pairingCode: handle.pairingCode,
         accessKeyPath,
         tunnelHint,
       },
       [
         `Don-Bot Cockpit listening at ${handle.url}`,
+        `  pairing:    ${handle.pairingCode} (valid 5m; single-use in browser unlock box)`,
         `  access-key: ${accessKeyPath} (present; secret omitted)`,
         `  remote:     ${tunnelHint}`,
       ],

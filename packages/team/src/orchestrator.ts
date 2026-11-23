@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   BACKGROUND_CONTEXT,
@@ -11,6 +11,7 @@ import {
   fauxToolCall,
   loadDonConfig,
   obj,
+  openDonDb,
   openDonSpine,
   opt,
   recordTurn,
@@ -19,6 +20,7 @@ import {
   resolveTierModel,
   str,
   updateTurnStatus,
+  VaultCredentialStore,
 } from '@don-bot/spine';
 import {
   discoverSkillDirs,
@@ -77,12 +79,28 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
 
   const dbPath = join(donDir, 'factory.sqlite');
   const config = options.config ?? loadDonConfig(dir);
+
+  let storedProviders: string[] = [];
+  let vaultKeys: { typesafe?: string; openrouter?: string; openai?: string } = {};
+  if (!options.faux && existsSync(dbPath)) {
+    const inspectDb = openDonDb(dbPath);
+    try {
+      const store = new VaultCredentialStore({ db: inspectDb.raw, donDir });
+      storedProviders = store.listDetailed().map((entry) => entry.providerId);
+      vaultKeys = await store.resolveJevApiKeys();
+    } finally {
+      inspectDb.close();
+    }
+  }
+
   const useFauxModel =
     Boolean(options.faux) ||
-    resolveTierModel(config, 'architect', { faux: options.faux }).provider === 'faux';
+    resolveTierModel(config, 'architect', { faux: options.faux, storedProviders }).provider ===
+      'faux';
   const activeJev = resolveConfiguredJevClient(config, {
     faux: useFauxModel,
     overrideClient: options.jevClient,
+    vaultKeys,
   });
 
   const complexity =
@@ -96,6 +114,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   const activeProfile = getAgentProfile(activeRole);
   const model = resolveTierModel(config, activeProfile.modelTier, {
     faux: options.faux,
+    storedProviders,
   });
   const useFaux = Boolean(options.faux) || model.provider === 'faux';
 

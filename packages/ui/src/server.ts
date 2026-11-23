@@ -1,14 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { ALL_ALLOWED_CATALOG_ACTIONS, A2UI_VERSION, DON_CATALOG_ID } from './a2ui.ts';
+import { detectRemoteTunnelTools } from '@don-bot/channels';
 import {
   appendEvent,
+  getOnboardingStatus,
   loadDonConfig,
+  OAuthSessionManager,
   openDonDb,
   readEventsAfter,
   recordTurn,
   resolveDecisionCard,
   updateTurnStatus,
+  VaultCredentialStore,
   withTurnLock,
   type DecisionCard,
   type DonConfig,
@@ -16,9 +19,14 @@ import {
   type DonEventRecord,
 } from '@don-bot/spine';
 import { gcWorktrees } from '@don-bot/team';
-import { ensureAccessKey, verifyAccessKey } from '@don-bot/trust';
+import { BlindVault, BlindVaultError, ensureAccessKey, verifyAccessKey } from '@don-bot/trust';
+import { ALL_ALLOWED_CATALOG_ACTIONS, A2UI_VERSION, DON_CATALOG_ID } from './a2ui.ts';
 import { buildHydratedCockpitSurface, buildZeroLlmPatchFromEvent } from './macros.ts';
 import { PWA_MANIFEST_JSON, PWA_SERVICE_WORKER_JS, renderCockpitHtml } from './pwa-html.ts';
+
+export type CockpitOAuthProviders = NonNullable<
+  Parameters<OAuthSessionManager['start']>[2]
+>['providers'];
 
 export interface StartCockpitServerOptions {
   readonly dir: string;
@@ -26,6 +34,8 @@ export interface StartCockpitServerOptions {
   readonly port?: number;
   readonly dbPath?: string;
   readonly config?: DonConfig;
+  readonly oauthProviders?: CockpitOAuthProviders;
+  readonly pairingTtlMs?: number;
 }
 
 export interface CockpitServerHandle {
@@ -34,6 +44,8 @@ export interface CockpitServerHandle {
   readonly port: number;
   readonly donDir: string;
   readonly db: DonDatabase;
+  readonly pairingCode: string;
+  rotatePairingCode(): string;
   broadcastEvent(event: DonEventRecord): number;
   stop(): Promise<void>;
 }
@@ -91,23 +103,81 @@ function formatSseFrame(event: DonEventRecord): Uint8Array {
   return new TextEncoder().encode(frame);
 }
 
+const PAIRING_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+function generatePairingCode(): string {
+  const bytes = randomBytes(6);
+  let suffix = '';
+  for (const byte of bytes) {
+    suffix += PAIRING_ALPHABET[byte % PAIRING_ALPHABET.length]!;
+  }
+  return `DON-${suffix}`;
+}
+
+function safeCompareCodes(expected: string, candidate: string): boolean {
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const actualBuf = Buffer.from(candidate, 'utf8');
+  if (expectedBuf.length === 0 || expectedBuf.length !== actualBuf.length) {
+    return false;
+  }
+  return timingSafeEqual(expectedBuf, actualBuf);
+}
+
 /**
  * Start the authenticated local A2UI v1.0 / SSE 3-pane cockpit server.
  */
 export function startCockpitServer(options: StartCockpitServerOptions): CockpitServerHandle {
   const repoDir = resolve(options.dir);
   const donDir = join(repoDir, '.don');
-  ensureAccessKey(donDir);
+  const accessKey = ensureAccessKey(donDir);
 
   const dbPath = resolve(options.dbPath ?? join(donDir, 'factory.sqlite'));
   const db = openDonDb(dbPath);
   const config = options.config ?? loadDonConfig(repoDir);
   const host = options.host ?? '127.0.0.1';
   const requestedPort = options.port ?? 0;
+  const pairingTtlMs = Math.max(5_000, options.pairingTtlMs ?? 5 * 60_000);
+
+  const credentialStore = new VaultCredentialStore({ db: db.raw, donDir });
+  const blindVault = new BlindVault({ db: db.raw, donDir });
+  let pairingState = {
+    code: generatePairingCode(),
+    expiresAt: Date.now() + pairingTtlMs,
+    used: false,
+  };
+
+  function rotatePairingCode(): string {
+    pairingState = {
+      code: generatePairingCode(),
+      expiresAt: Date.now() + pairingTtlMs,
+      used: false,
+    };
+    return pairingState.code;
+  }
 
   const subscribers = new Set<SseSubscriber>();
   const previewStore = new Map<string, string>();
   const cockpitHtml = renderCockpitHtml();
+
+  function emitSystemAndBroadcast(payload: unknown): number {
+    const seq = appendEvent(db, {
+      runId: 'onboarding',
+      agentId: 'operator',
+      kind: 'system',
+      payload,
+    });
+    const persisted = readEventsAfter(db, seq - 1, 1)[0];
+    if (persisted) {
+      broadcastEvent(persisted);
+    }
+    return seq;
+  }
+
+  const oauthManager = new OAuthSessionManager({
+    onComplete: (providerId) => {
+      emitSystemAndBroadcast({ event: 'oauth_connected', providerId });
+    },
+  });
 
   function broadcastEvent(event: DonEventRecord): number {
     const encoded = formatSseFrame(event);
@@ -153,6 +223,34 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
           status: 200,
           headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
         });
+      }
+
+      if (pathname === '/api/auth/pair' && req.method === 'POST') {
+        let body: { code?: string };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+        }
+
+        const candidate = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
+        if (
+          !candidate ||
+          pairingState.used ||
+          Date.now() > pairingState.expiresAt ||
+          !safeCompareCodes(pairingState.code, candidate)
+        ) {
+          return jsonResponse(
+            {
+              ok: false,
+              error: 'Invalid, expired, or already-used Cockpit pairing code',
+            },
+            401,
+          );
+        }
+
+        pairingState.used = true;
+        return jsonResponse({ ok: true, accessKey });
       }
 
       if (pathname.startsWith('/api/')) {
@@ -376,6 +474,152 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
         });
       }
 
+      if (pathname === '/api/onboarding/status' && req.method === 'GET') {
+        const status = await getOnboardingStatus({ dir: repoDir, db });
+        return jsonResponse({
+          ok: true,
+          ...status,
+          remoteTunnels: detectRemoteTunnelTools(),
+        });
+      }
+
+      if (pathname === '/api/onboarding/credential' && req.method === 'POST') {
+        let body: {
+          kind?: string;
+          providerId?: string;
+          apiKey?: string;
+          apiId?: string | number;
+          apiHash?: string;
+        };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+        }
+
+        try {
+          if (body.kind === 'telegram') {
+            const apiId = String(body.apiId ?? '').trim();
+            const apiHash = typeof body.apiHash === 'string' ? body.apiHash.trim() : '';
+            if (!apiId || !apiHash) {
+              return jsonResponse(
+                { ok: false, error: 'Both telegram apiId and apiHash are required' },
+                400,
+              );
+            }
+            await blindVault.setSecret({
+              name: 'telegram_api_id',
+              kind: 'api_key',
+              value: apiId,
+              allowedHosts: ['api.telegram.org', 'telegram.org'],
+            });
+            await blindVault.setSecret({
+              name: 'telegram_api_hash',
+              kind: 'api_key',
+              value: apiHash,
+              allowedHosts: ['api.telegram.org', 'telegram.org'],
+            });
+            emitSystemAndBroadcast({ event: 'telegram_configured' });
+            const status = await getOnboardingStatus({ dir: repoDir, db });
+            return jsonResponse({ ok: true, status });
+          }
+
+          const providerId = typeof body.providerId === 'string' ? body.providerId.trim() : '';
+          const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+          if (!providerId || !apiKey) {
+            return jsonResponse(
+              { ok: false, error: 'Both providerId and non-empty apiKey are required' },
+              400,
+            );
+          }
+
+          await credentialStore.setApiKey(providerId, apiKey, 'cockpit');
+          emitSystemAndBroadcast({ event: 'credential_saved', providerId });
+          const status = await getOnboardingStatus({ dir: repoDir, db });
+          return jsonResponse({ ok: true, providerId, status });
+        } catch (err) {
+          if (err instanceof BlindVaultError) {
+            return jsonResponse({ ok: false, error: err.message }, 400);
+          }
+          return jsonResponse(
+            { ok: false, error: err instanceof Error ? err.message : String(err) },
+            400,
+          );
+        }
+      }
+
+      if (pathname.startsWith('/api/onboarding/credential/') && req.method === 'DELETE') {
+        const providerId = decodeURIComponent(
+          pathname.slice('/api/onboarding/credential/'.length),
+        ).trim();
+        if (!providerId) {
+          return jsonResponse({ ok: false, error: 'Missing providerId' }, 400);
+        }
+        await credentialStore.delete(providerId);
+        emitSystemAndBroadcast({ event: 'credential_removed', providerId });
+        const status = await getOnboardingStatus({ dir: repoDir, db });
+        return jsonResponse({ ok: true, providerId, status });
+      }
+
+      if (pathname === '/api/onboarding/oauth/start' && req.method === 'POST') {
+        let body: { providerId?: string };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+        }
+        const providerId = typeof body.providerId === 'string' ? body.providerId.trim() : '';
+        if (!providerId) {
+          return jsonResponse({ ok: false, error: 'Missing providerId' }, 400);
+        }
+        const session = oauthManager.start(providerId, credentialStore, {
+          providers: options.oauthProviders,
+        });
+        return jsonResponse({ ok: true, session });
+      }
+
+      if (pathname.startsWith('/api/onboarding/oauth/') && req.method === 'GET') {
+        const sessionId = pathname.slice('/api/onboarding/oauth/'.length);
+        const session = oauthManager.get(sessionId);
+        if (!session) {
+          return jsonResponse({ ok: false, error: 'OAuth session not found' }, 404);
+        }
+        return jsonResponse({ ok: true, session });
+      }
+
+      if (pathname.startsWith('/api/onboarding/oauth/') && req.method === 'POST') {
+        const tail = pathname.slice('/api/onboarding/oauth/'.length);
+        const [sessionId, action] = tail.split('/');
+        if (!sessionId || !action) {
+          return jsonResponse({ ok: false, error: 'Invalid OAuth action URL' }, 400);
+        }
+        if (action === 'submit') {
+          let body: { value?: string };
+          try {
+            body = (await req.json()) as typeof body;
+          } catch {
+            return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+          }
+          const value = typeof body.value === 'string' ? body.value : '';
+          try {
+            const session = oauthManager.submitPrompt(sessionId, value);
+            return jsonResponse({ ok: true, session });
+          } catch (err) {
+            return jsonResponse(
+              { ok: false, error: err instanceof Error ? err.message : String(err) },
+              400,
+            );
+          }
+        }
+        if (action === 'cancel') {
+          const session = oauthManager.cancel(sessionId);
+          if (!session) {
+            return jsonResponse({ ok: false, error: 'OAuth session not found' }, 404);
+          }
+          return jsonResponse({ ok: true, session });
+        }
+      }
+
       return jsonResponse({ ok: false, error: 'Not found' }, 404);
     },
   });
@@ -389,8 +633,13 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
     port: actualPort,
     donDir,
     db,
+    get pairingCode(): string {
+      return pairingState.code;
+    },
+    rotatePairingCode,
     broadcastEvent,
     async stop(): Promise<void> {
+      oauthManager.cancelAll();
       for (const sub of Array.from(subscribers)) {
         sub.close();
       }

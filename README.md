@@ -26,16 +26,17 @@ bun run test:crash
 
 ---
 
-## Single-Key BYOK & Workspace Onboarding
+## Zero-Friction OAuth & Key Onboarding
 
-Set any **one** provider key in your environment — any unspecified model tier (`architect`, `workhorse`, `fast`, `gate`) automatically falls back to that provider's defaults:
+Run the guided wizard once per workspace — **one OpenRouter OAuth login** (`don login openrouter`) automatically activates all 4 LLM tiers **and** live System-One Jev (`typesafe/jev-1.14`), sealing all secrets encrypted inside SQLite (`don_provider_credentials` via `don-guard` / `AES-256-GCM`):
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
-export TYPESAFE_API_KEY="ts-..."         # optional: System-One jev-1.14.0 decision gates (or auto-uses OPENROUTER_API_KEY -> typesafe/jev-1.14)
+bun run don onboard --dir /path/to/your-repo      # Guided interactive setup (OAuth / masked keys / Telegram Blind Vault)
+bun run don login openrouter                      # Direct 1-click OAuth PKCE (or: anthropic, openai, openai-codex, github-copilot)
+bun run don serve --dir /path/to/your-repo        # Prints a 5-min single-use pairing code (DON-XXXXXX) for the browser Cockpit
 ```
 
-Then initialize and run against any repository:
+Or continue using any **one** ambient environment key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `TYPESAFE_API_KEY`) and run:
 
 ```bash
 bun run don init --dir /path/to/your-repo
@@ -50,10 +51,13 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 | Command | Purpose |
 | :--- | :--- |
 | `don init [--dir <path>]` | Create `.don/factory.sqlite` (WAL), `.don/config.yaml`, `.don/access-key`, and `.don/.gitignore` |
+| `don onboard [--dir <path>] [--non-interactive]` | Guided setup for OAuth AI brain (`openrouter`/`claude`/`chatgpt`/`copilot`), System-One Jev & Telegram Blind Vault |
+| `don login [provider] [--dir <path>]` | Run built-in OAuth PKCE / Device Code sign-in (`openrouter` default unlocks AI + Jev) |
+| `don auth <status\|set\|logout>` | Inspect, encrypt into SQLite, or remove provider credentials without echoing secrets |
 | `don run "<goal>" [--faux] [--role <id>]` | Run a single-lane task directly without opening a debate room |
 | `don team "<goal>" [--faux] [--role <id>]` | Run complexity-gated Lead + Specialist orchestration (`api-keeper`, `pipeline-forge`, `client-qa`, `memory-curator`) |
 | `don status [--dir <path>]` | Report SQLite WAL status, `safeagents` guard mode, budget caps, queue counts, and active worktrees |
-| `don serve [--port <n>] [--host <addr>]` | Start the authenticated A2UI `v1.0` / SSE 3-pane Liquid PWA Cockpit server (`127.0.0.1:4321`) |
+| `don serve [--port <n>] [--host <addr>]` | Start the authenticated A2UI `v1.0` / SSE 3-pane Liquid PWA Cockpit server (`127.0.0.1:4321`) + short `DON-XXXXXX` pairing code |
 | `don resume [--dir <path>]` | Inspect paused/interrupted tasks, incomplete `once()` memos, blocked cooldowns, and Decision Deck cards |
 | `don guard <status\|rust-status\|jev-status\|block\|log-only\|install>` | Check `safeagents`, compiled Rust `don-guard`, or Jev System-One config & toggle guard mode |
 | `don vault <set\|list>` | Store or list host-bound AES-256-GCM Blind Vault credentials (never echoes secret plaintext) |
@@ -113,6 +117,7 @@ bun run don skills harness --dir /path/to/your-repo
 | `tests/chaos/09-slice04-telegram-firewall.test.ts` | `@mtcute/bun` native SQLite, two-zone outbound firewall, `EXCLUSIONS.txt`, Inline Buttons & STT routing |
 | `tests/chaos/10-slice05-a2ui-cockpit.test.ts` | A2UI `v1.0` `don.catalog.v1`, TS Macro Expander, `.don/access-key` SSE, Preview CSP & headless Chromium CDP |
 | `tests/chaos/11-jev-system-one-agents.test.ts` | Live Jev wire protocol (`typesafe`/`openrouter`/`openai`), 45-feature GBDT ensemble, and 5 factory Jev gates |
+| `tests/chaos/12-onboarding-oauth-vault.test.ts` | Encrypted `VaultCredentialStore`, 1-login OpenRouter OAuth (+ auto-Jev), single-use Cockpit pairing codes & CLI auth lifecycle |
 
 ---
 

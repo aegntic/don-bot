@@ -179,6 +179,8 @@ export function renderCockpitHtml(): string {
       padding: 7px 12px;
       font-size: 12px;
       font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
       cursor: pointer;
       transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
     }
@@ -392,8 +394,92 @@ export function renderCockpitHtml(): string {
       padding: 10px 18px 0;
     }
 
+    .onboarding-drawer {
+      max-width: 1380px;
+      margin: 14px auto 0;
+      padding: 0 18px;
+    }
+
+    .onboarding-shell {
+      background: rgba(15, 20, 29, 0.96);
+      border: 1px solid rgba(63, 193, 255, 0.42);
+      border-top: 2px solid var(--ice);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .setup-steps {
+      display: grid;
+      grid-template-columns: 1.35fr 0.9fr 0.9fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .step-card {
+      background: var(--panel);
+      border: 1px solid var(--metal);
+      border-radius: 12px;
+      padding: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #oauth-provider-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .provider-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 10px;
+      border-radius: 9px;
+      background: var(--obsidian);
+      border: 1px solid var(--metal);
+    }
+
+    .provider-row.active { border-color: rgba(63, 193, 255, 0.55); }
+    .provider-row.recommended { border-left: 2px solid var(--ice); }
+
+    .oauth-box {
+      padding: 11px;
+      border-radius: 10px;
+      background: var(--obsidian);
+      border: 1px solid var(--orange);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .code-chip {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: var(--ice);
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: var(--slate);
+      border: 1px solid var(--ice);
+      text-align: center;
+    }
+
+    .auth-error {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--orange);
+    }
+
     @media (max-width: 1080px) {
-      .cockpit-grid {
+      .cockpit-grid,
+      .setup-steps {
         grid-template-columns: 1fr;
       }
       .pane { min-height: auto; }
@@ -412,6 +498,7 @@ export function renderCockpitHtml(): string {
       </div>
     </div>
     <div class="status-strip">
+      <button class="pill orange" id="setup-pill" type="button">Setup Needed</button>
       <span class="pill ice" id="sse-badge"><span class="dot" id="sse-dot"></span><span id="sse-label">SSE Standby</span></span>
       <span class="pill" id="seq-badge">seq #0</span>
       <span class="pill" id="cost-push-badge">$0.00 LLM push</span>
@@ -426,10 +513,84 @@ export function renderCockpitHtml(): string {
   </nav>
 
   <section class="auth-gate" id="auth-gate" hidden>
-    <div class="card-kind">ACCESS KEY REQUIRED (.don/access-key)</div>
-    <p class="card-body">Paste the workspace <code>.don/access-key</code> token to unlock live SSE updates and authenticated approvals.</p>
-    <input class="input" id="access-key-input" type="password" placeholder="Paste .don/access-key hex token" autocomplete="off" />
-    <button class="btn primary" id="unlock-btn" type="button">Unlock Cockpit</button>
+    <div class="card-kind">UNLOCK DON-BOT COCKPIT</div>
+    <p class="card-body">Enter the 6-character pairing code shown by <code>don serve</code> (e.g. <code>DON-7F3A92</code>) or paste your workspace <code>.don/access-key</code> token.</p>
+    <input class="input" id="access-key-input" type="password" placeholder="DON-XXXXXX pairing code or access-key" autocomplete="off" />
+    <div class="auth-error" id="auth-error" hidden></div>
+    <button class="btn primary" id="unlock-btn" type="button">Pair &amp; Unlock Cockpit</button>
+  </section>
+
+  <section class="onboarding-drawer" id="onboarding-drawer" hidden>
+    <div class="onboarding-shell">
+      <div class="pane-header">
+        <div>
+          <span class="pane-title">Streamlined Setup // Connect OAuth &amp; Encrypted Keys</span>
+          <div class="mono-meta" id="onboarding-summary">Checking workspace credentials...</div>
+        </div>
+        <button class="btn" id="close-onboarding-btn" type="button">Hide Setup</button>
+      </div>
+      <div class="setup-steps">
+        <div class="step-card">
+          <div class="card-head">
+            <span class="card-kind">1. Connect 1 AI Brain</span>
+            <span class="mono-meta" id="brain-badge">Pending</span>
+          </div>
+          <div id="oauth-provider-list"></div>
+          <div class="oauth-box" id="oauth-active-box" hidden>
+            <div class="card-kind" id="oauth-active-title">OAuth Sign-In In Progress</div>
+            <div class="mono-meta" id="oauth-active-msg"></div>
+            <div class="code-chip" id="oauth-device-code" hidden></div>
+            <a class="btn primary" id="oauth-auth-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open Provider Sign-In</a>
+            <div id="oauth-manual-row" hidden>
+              <input class="input" id="oauth-manual-input" type="text" placeholder="Paste callback URL or code if remote" />
+              <div class="card-actions">
+                <button class="btn primary" id="oauth-manual-submit" type="button">Complete Sign-In</button>
+              </div>
+            </div>
+            <div class="card-actions">
+              <button class="btn hold" id="oauth-cancel-btn" type="button">Cancel OAuth</button>
+            </div>
+          </div>
+          <div class="mono-meta">Or save an encrypted API key directly into SQLite:</div>
+          <select class="input" id="api-provider-select" aria-label="AI Provider">
+            <option value="openrouter">OpenRouter (AI + System-One Jev)</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="openai">OpenAI API</option>
+            <option value="google">Google Gemini</option>
+          </select>
+          <input class="input" id="api-key-input" type="password" placeholder="Paste API key (sealed with AES-256-GCM)" autocomplete="off" />
+          <div class="card-actions">
+            <button class="btn primary" id="save-api-key-btn" type="button">Save Encrypted Key</button>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="card-head">
+            <span class="card-kind">2. System-One Jev Gate</span>
+            <span class="mono-meta" id="jev-badge">Pending</span>
+          </div>
+          <p class="card-body" id="jev-explain">Connect OpenRouter OAuth to auto-enable System-One Jev (typesafe/jev-1.14), or add a dedicated TypeSafe key.</p>
+          <input class="input" id="typesafe-key-input" type="password" placeholder="Optional TYPESAFE_API_KEY (jev-1.14.0)" autocomplete="off" />
+          <div class="card-actions">
+            <button class="btn" id="save-typesafe-btn" type="button">Save TypeSafe Key</button>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="card-head">
+            <span class="card-kind">3. Telegram &amp; Zero-Port Access</span>
+            <span class="mono-meta" id="tg-badge">Optional</span>
+          </div>
+          <p class="mono-meta">Encrypt Telegram Desktop MTProto credentials inside Blind Vault (optional):</p>
+          <input class="input" id="tg-api-id-input" type="text" placeholder="Telegram api_id (from my.telegram.org)" autocomplete="off" />
+          <input class="input" id="tg-api-hash-input" type="password" placeholder="Telegram api_hash" autocomplete="off" />
+          <div class="card-actions">
+            <button class="btn" id="save-tg-btn" type="button">Save to Blind Vault</button>
+          </div>
+          <div class="mono-meta" id="tunnel-hint">Remote access: tailscale serve / cloudflared</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <main class="cockpit-grid" id="cockpit-main">
@@ -483,7 +644,26 @@ export function renderCockpitHtml(): string {
       let streamAbort = null;
 
       const elAuthGate = document.getElementById('auth-gate');
+      const elAuthError = document.getElementById('auth-error');
+      const elOnboardingDrawer = document.getElementById('onboarding-drawer');
+      const elSetupPill = document.getElementById('setup-pill');
+      const elOnboardingSummary = document.getElementById('onboarding-summary');
+      const elOauthList = document.getElementById('oauth-provider-list');
+      const elOauthBox = document.getElementById('oauth-active-box');
+      const elOauthTitle = document.getElementById('oauth-active-title');
+      const elOauthMsg = document.getElementById('oauth-active-msg');
+      const elOauthCode = document.getElementById('oauth-device-code');
+      const elOauthLink = document.getElementById('oauth-auth-link');
+      const elOauthManualRow = document.getElementById('oauth-manual-row');
+      const elOauthManualInput = document.getElementById('oauth-manual-input');
+      const elBrainBadge = document.getElementById('brain-badge');
+      const elJevBadge = document.getElementById('jev-badge');
+      const elJevExplain = document.getElementById('jev-explain');
+      const elTgBadge = document.getElementById('tg-badge');
+      const elTunnelHint = document.getElementById('tunnel-hint');
       const elMain = document.getElementById('cockpit-main');
+      let activeOauthSessionId = null;
+      let oauthPollTimer = null;
       const elLeft = document.getElementById('left-cards');
       const elCenter = document.getElementById('center-cards');
       const elRight = document.getElementById('right-cards');
@@ -659,7 +839,155 @@ export function renderCockpitHtml(): string {
         elMain.style.display = 'grid';
         const data = await res.json();
         renderSurface(data);
+        void loadOnboardingStatus();
         return true;
+      }
+
+      function stopOauthPolling() {
+        if (oauthPollTimer !== null) {
+          clearInterval(oauthPollTimer);
+          oauthPollTimer = null;
+        }
+      }
+
+      function renderOauthSession(session) {
+        if (!session) {
+          elOauthBox.hidden = true;
+          stopOauthPolling();
+          activeOauthSessionId = null;
+          return;
+        }
+        elOauthBox.hidden = false;
+        elOauthTitle.textContent = 'OAuth: ' + String(session.providerId) + ' (' + String(session.status) + ')';
+        elOauthMsg.textContent = session.error || session.promptMessage || session.instructions || session.message || 'Follow sign-in instructions below.';
+
+        if (session.userCode) {
+          elOauthCode.hidden = false;
+          elOauthCode.textContent = session.userCode;
+        } else {
+          elOauthCode.hidden = true;
+        }
+
+        const linkUrl = session.authUrl || session.verificationUri || '';
+        if (linkUrl) {
+          elOauthLink.hidden = false;
+          elOauthLink.href = linkUrl;
+        } else {
+          elOauthLink.hidden = true;
+        }
+
+        elOauthManualRow.hidden = !(session.status === 'awaiting_input' && session.promptMessage);
+
+        if (session.status === 'completed' || session.status === 'failed' || session.status === 'cancelled') {
+          stopOauthPolling();
+          if (session.status === 'completed') {
+            void loadOnboardingStatus();
+          }
+        }
+      }
+
+      async function pollOauthSession() {
+        if (!activeOauthSessionId) return;
+        const res = await apiFetch('/api/onboarding/oauth/' + encodeURIComponent(activeOauthSessionId));
+        if (!res.ok) return;
+        const data = await res.json();
+        renderOauthSession(data.session);
+      }
+
+      async function startOauthFlow(providerId) {
+        const res = await apiFetch('/api/onboarding/oauth/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ providerId }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        activeOauthSessionId = data.session.sessionId;
+        renderOauthSession(data.session);
+        stopOauthPolling();
+        oauthPollTimer = setInterval(() => {
+          void pollOauthSession();
+        }, 700);
+        void pollOauthSession();
+      }
+
+      function renderOnboardingStatus(status) {
+        if (status.brainReady) {
+          elSetupPill.textContent = 'Auth Ready (' + String(status.activeBrainProvider) + ')';
+          elSetupPill.className = 'pill ice';
+          elBrainBadge.textContent = String(status.activeBrainProvider) + ' · ' + String(status.activeBrainSource);
+        } else {
+          elSetupPill.textContent = 'Setup Needed';
+          elSetupPill.className = 'pill orange';
+          elBrainBadge.textContent = 'Connect 1 provider';
+        }
+
+        if (status.jevReady) {
+          elJevBadge.textContent = String(status.jevProvider) + ' · ' + String(status.jevSource);
+          elJevExplain.textContent = 'System-One Jev is active (' + String(status.jevProvider) + ') gating mutating tools, Verifier stop checks, routing, and FTS5 memory.';
+        } else {
+          elJevBadge.textContent = 'Offline / Deterministic';
+          elJevExplain.textContent = 'Connect OpenRouter OAuth to auto-enable System-One Jev (typesafe/jev-1.14), or add a dedicated TypeSafe key.';
+        }
+
+        elTgBadge.textContent = status.telegramReady ? 'Blind Vault Ready' : 'Optional';
+        elOnboardingSummary.textContent =
+          'Brain=' + (status.brainReady ? 'ready' : 'needed') +
+          ' · Jev=' + (status.jevReady ? 'active' : 'standby') +
+          ' · RustGuard=' + (status.rustGuardReady ? 'live' : 'fallback');
+
+        if (status.remoteTunnels) {
+          const available = [];
+          if (status.remoteTunnels.tailscale) available.push('tailscale serve --bg');
+          if (status.remoteTunnels.cloudflared) available.push('cloudflared tunnel');
+          elTunnelHint.textContent = available.length > 0
+            ? 'Detected on host: ' + available.join(' · ')
+            : 'Zero-port remote access: tailscale serve --bg or cloudflared tunnel';
+        }
+
+        clearChildren(elOauthList);
+        (status.providers || []).filter((p) => p.oauthSupported).forEach((p) => {
+          const row = document.createElement('div');
+          row.className = 'provider-row' + (p.configured ? ' active' : '') + (p.recommended ? ' recommended' : '');
+          const info = document.createElement('div');
+          const title = createTextEl('div', 'card-body', p.recommended ? p.name + ' (Recommended + Jev)' : p.name);
+          const sub = createTextEl('div', 'mono-meta', p.configured ? 'Connected · ' + String(p.source) : p.summary);
+          info.appendChild(title);
+          info.appendChild(sub);
+          row.appendChild(info);
+
+          if (p.configured) {
+            const btnOut = createTextEl('button', 'btn', 'Disconnect');
+            btnOut.type = 'button';
+            btnOut.addEventListener('click', async () => {
+              const delRes = await apiFetch('/api/onboarding/credential/' + encodeURIComponent(p.id), { method: 'DELETE' });
+              if (delRes.ok) {
+                const payload = await delRes.json();
+                renderOnboardingStatus(payload.status);
+              }
+            });
+            row.appendChild(btnOut);
+          } else {
+            const btnIn = createTextEl('button', p.recommended ? 'btn primary' : 'btn', 'Sign in');
+            btnIn.type = 'button';
+            btnIn.addEventListener('click', () => {
+              void startOauthFlow(p.id);
+            });
+            row.appendChild(btnIn);
+          }
+          elOauthList.appendChild(row);
+        });
+
+        if (!status.brainReady && !sessionStorage.getItem('don_onboarding_dismissed')) {
+          elOnboardingDrawer.hidden = false;
+        }
+      }
+
+      async function loadOnboardingStatus() {
+        const res = await apiFetch('/api/onboarding/status');
+        if (!res.ok) return;
+        const status = await res.json();
+        renderOnboardingStatus(status);
       }
 
       async function connectSse() {
@@ -706,9 +1034,119 @@ export function renderCockpitHtml(): string {
       document.getElementById('unlock-btn').addEventListener('click', async () => {
         const val = document.getElementById('access-key-input').value.trim();
         if (!val) return;
-        sessionStorage.setItem(STORAGE_KEY, val);
+        elAuthError.hidden = true;
+
+        let tokenToUse = val;
+        if (/^don-[a-z0-9]{4,12}$/i.test(val)) {
+          const pairRes = await fetch('/api/auth/pair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: val }),
+          });
+          if (!pairRes.ok) {
+            elAuthError.textContent = 'Invalid or expired pairing code. Check terminal output from don serve.';
+            elAuthError.hidden = false;
+            return;
+          }
+          const pairData = await pairRes.json();
+          tokenToUse = pairData.accessKey || '';
+        }
+
+        sessionStorage.setItem(STORAGE_KEY, tokenToUse);
         const ok = await loadSurface();
-        if (ok) void connectSse();
+        if (ok) {
+          void connectSse();
+        } else {
+          elAuthError.textContent = 'Access token rejected.';
+          elAuthError.hidden = false;
+        }
+      });
+
+      elSetupPill.addEventListener('click', () => {
+        elOnboardingDrawer.hidden = !elOnboardingDrawer.hidden;
+      });
+
+      document.getElementById('close-onboarding-btn').addEventListener('click', () => {
+        sessionStorage.setItem('don_onboarding_dismissed', '1');
+        elOnboardingDrawer.hidden = true;
+      });
+
+      document.getElementById('oauth-manual-submit').addEventListener('click', async () => {
+        if (!activeOauthSessionId) return;
+        const val = elOauthManualInput.value.trim();
+        if (!val) return;
+        elOauthManualInput.value = '';
+        const res = await apiFetch('/api/onboarding/oauth/' + encodeURIComponent(activeOauthSessionId) + '/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: val }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderOauthSession(data.session);
+        }
+      });
+
+      document.getElementById('oauth-cancel-btn').addEventListener('click', async () => {
+        if (!activeOauthSessionId) return;
+        const res = await apiFetch('/api/onboarding/oauth/' + encodeURIComponent(activeOauthSessionId) + '/cancel', {
+          method: 'POST',
+        });
+        if (res.ok) {
+          renderOauthSession(null);
+        }
+      });
+
+      document.getElementById('save-api-key-btn').addEventListener('click', async () => {
+        const providerId = document.getElementById('api-provider-select').value;
+        const input = document.getElementById('api-key-input');
+        const apiKey = input.value.trim();
+        if (!apiKey) return;
+        input.value = '';
+        const res = await apiFetch('/api/onboarding/credential', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ providerId, apiKey }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderOnboardingStatus(data.status);
+        }
+      });
+
+      document.getElementById('save-typesafe-btn').addEventListener('click', async () => {
+        const input = document.getElementById('typesafe-key-input');
+        const apiKey = input.value.trim();
+        if (!apiKey) return;
+        input.value = '';
+        const res = await apiFetch('/api/onboarding/credential', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ providerId: 'typesafe', apiKey }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderOnboardingStatus(data.status);
+        }
+      });
+
+      document.getElementById('save-tg-btn').addEventListener('click', async () => {
+        const idInput = document.getElementById('tg-api-id-input');
+        const hashInput = document.getElementById('tg-api-hash-input');
+        const apiId = idInput.value.trim();
+        const apiHash = hashInput.value.trim();
+        if (!apiId || !apiHash) return;
+        idInput.value = '';
+        hashInput.value = '';
+        const res = await apiFetch('/api/onboarding/credential', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'telegram', apiId, apiHash }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderOnboardingStatus(data.status);
+        }
       });
 
       document.getElementById('load-demo-preview').addEventListener('click', async () => {
