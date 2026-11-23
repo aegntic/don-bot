@@ -4,7 +4,9 @@ import { parseArgs } from 'node:util';
 import {
   BACKGROUND_CONTEXT,
   type DonConfig,
+  type DonDatabase,
   listDecisionCards,
+  listSkillEvalRuns,
   loadDonConfig,
   openDonDb,
   openDonSpine,
@@ -17,12 +19,19 @@ import {
   gcWorktrees,
   getTeamStatus,
   listSpecialistWorktrees,
+  runSkillGate,
   runTeamGoal,
 } from '@don-bot/team';
 import {
   detectSafeAgentsBinary,
+  detectSkillEvaluatorBinary,
+  discoverSkillDirs,
   ensureAccessKey,
   getSafeAgentsInstallCommand,
+  getSkillEvaluatorInstallCommand,
+  runSkillHarnessCheck,
+  type SkillEvaluatorTier,
+  type SkillHarnessCheckResult,
 } from '@don-bot/trust';
 
 export interface CliIo {
@@ -58,6 +67,7 @@ function renderHelp(): string {
     '  status                           Show SQLite WAL, safeagents, budget caps, queue & worktree status',
     '  resume                           Inspect paused/interrupted tasks, once() memos & Decision Deck cards',
     '  guard <status|block|log-only|install>   Inspect or toggle safeagents firewall mode',
+    '  skills <status|eval|harness|history|block|log-only|install>  Run core NVIDIA SkillEvaluator checks',
     '  worktree gc                      Prune merged or stale specialist git worktrees',
     '  test:crash                       Run Chaos Test 1 (real SIGKILL + once() recovery)',
     '',
@@ -65,6 +75,8 @@ function renderHelp(): string {
     '  --dir <path>                     Target repository directory (default: cwd)',
     '  --faux                           Use deterministic offline scripted provider',
     '  --role <roleId>                  Override active role (lead|api-keeper|pipeline-forge|client-qa|memory-curator)',
+    '  --tiers <list>                   SkillEvaluator tiers (e.g. 1, 1,2, 1,2,3)',
+    '  --min-score <0-100>              Minimum SkillEvaluator Tier 1 quality score',
     '  --json                           Emit machine-readable JSON output',
     '  -h, --help                       Show help',
     '  -v, --version                    Print version banner',
@@ -103,6 +115,33 @@ function parseRoleFlag(rawRole: string | boolean | undefined): AgentRoleId | und
   return VALID_ROLES.includes(rawRole as AgentRoleId) ? (rawRole as AgentRoleId) : 'invalid';
 }
 
+function parseTiersFlag(
+  rawTiers: string | boolean | undefined,
+): readonly SkillEvaluatorTier[] | undefined | 'invalid' {
+  if (rawTiers === undefined || rawTiers === false) return undefined;
+  if (typeof rawTiers !== 'string' || rawTiers.trim().length === 0) return 'invalid';
+  const parts = rawTiers
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (parts.length === 0) return 'invalid';
+  const parsed: SkillEvaluatorTier[] = [];
+  for (const part of parts) {
+    if (part !== '1' && part !== '2' && part !== '3') return 'invalid';
+    const num = Number(part) as SkillEvaluatorTier;
+    if (!parsed.includes(num)) parsed.push(num);
+  }
+  return parsed;
+}
+
+function parseMinScoreFlag(rawScore: string | boolean | undefined): number | undefined | 'invalid' {
+  if (rawScore === undefined || rawScore === false) return undefined;
+  if (typeof rawScore !== 'string' || !/^\d+$/.test(rawScore.trim())) return 'invalid';
+  const n = Number(rawScore.trim());
+  if (!Number.isInteger(n) || n < 0 || n > 100) return 'invalid';
+  return n;
+}
+
 export async function runCli(
   argv: readonly string[] = process.argv.slice(2),
   io: CliIo = {},
@@ -116,6 +155,8 @@ export async function runCli(
       dir: { type: 'string' },
       faux: { type: 'boolean', default: false },
       role: { type: 'string' },
+      tiers: { type: 'string' },
+      'min-score': { type: 'string' },
       json: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
       version: { type: 'boolean', short: 'v', default: false },
@@ -194,6 +235,8 @@ export async function runCli(
     const dbExists = existsSync(dbPath);
     const accessKeyPresent = existsSync(join(donDir, 'access-key'));
     const safeAgentsBin = detectSafeAgentsBinary();
+    const skillEvalBin = detectSkillEvaluatorBinary();
+    const discoveredSkills = discoverSkillDirs(dir, config.skillEvaluator.skillPaths);
 
     let journalMode = 'uninitialized';
     let pendingDecisions = 0;
@@ -237,6 +280,14 @@ export async function runCli(
         port: config.safeagents.port,
         binary: safeAgentsBin,
       },
+      skillEvaluator: {
+        enabled: config.skillEvaluator.enabled,
+        mode: config.skillEvaluator.mode,
+        tiers: config.skillEvaluator.tiers,
+        minScore: config.skillEvaluator.minScore,
+        binary: skillEvalBin,
+        discoveredSkills,
+      },
       budgets: config.budgets,
       pendingDecisions,
       blockedCooldowns,
@@ -252,6 +303,7 @@ export async function runCli(
         `  sqlite WAL:        ${dbExists ? `ready (${journalMode})` : 'uninitialized (run don init)'}`,
         `  access-key:        ${accessKeyPresent ? 'present (redacted)' : 'missing'}`,
         `  safeagents guard:  mode=${config.safeagents.mode} port=${config.safeagents.port} binary=${safeAgentsBin ?? 'not installed'}`,
+        `  skillEvaluator:    enabled=${config.skillEvaluator.enabled} mode=${config.skillEvaluator.mode} tiers=${config.skillEvaluator.tiers.join(',')} minScore=${config.skillEvaluator.minScore} binary=${skillEvalBin ?? 'builtin-fallback'} skills=${discoveredSkills.length}`,
         `  budget caps:       subagent=$${config.budgets.subagentMaxUsd.toFixed(2)} task=$${config.budgets.taskMaxUsd.toFixed(2)} (downshift ${config.budgets.taskDownshiftPct}%) daily=$${config.budgets.dailyMaxUsd.toFixed(2)}`,
         `  queues:            pendingDecisions=${pendingDecisions} blockedCooldowns=${blockedCooldowns}`,
         `  managed worktrees: ${managedWorktrees === null ? 'n/a (not a git repo)' : String(managedWorktrees)}`,
@@ -295,10 +347,11 @@ export async function runCli(
       `  role:       ${result.activeRole}`,
       `  complexity: ${result.complexity.complexity} (room=${result.roomId ? `${result.roomId}, msgs=${result.roomMessages.length}` : 'bypassed'})`,
       `  budget:     taskUsd=$${result.budget.taskUsd.toFixed(4)} status=${result.budget.status}`,
+      ...(result.skillGate ? [`  skillGate:  ${result.skillGate.summary}`] : []),
       `  summary:    ${result.summary}`,
     ];
     emitResult(asJson, result, lines, out);
-    return 0;
+    return result.status === 'blocked' ? 1 : 0;
   }
 
   if (command === 'resume') {
@@ -429,6 +482,224 @@ export async function runCli(
     writeLine(
       errOut,
       `Unknown guard subcommand "${action}". Expected: status, block, log-only, install`,
+    );
+    return 2;
+  }
+
+  if (command === 'skills') {
+    const action = rest[0] ?? 'status';
+    const targetArg = rest[1];
+
+    if (action === 'status') {
+      const config = loadDonConfig(dir);
+      const binary = detectSkillEvaluatorBinary();
+      const discoveredSkills = discoverSkillDirs(dir, config.skillEvaluator.skillPaths);
+      let recordedRuns = 0;
+      if (existsSync(dbPath)) {
+        const db = openDonDb(dbPath);
+        try {
+          recordedRuns = listSkillEvalRuns(db, { limit: 200 }).length;
+        } finally {
+          db.close();
+        }
+      }
+      const payload = {
+        enabled: config.skillEvaluator.enabled,
+        mode: config.skillEvaluator.mode,
+        tiers: config.skillEvaluator.tiers,
+        minScore: config.skillEvaluator.minScore,
+        profile: config.skillEvaluator.profile,
+        noLlm: config.skillEvaluator.noLlm,
+        requireBinary: config.skillEvaluator.requireBinary,
+        binary,
+        discoveredSkills,
+        recordedRuns,
+      };
+      emitResult(
+        asJson,
+        payload,
+        [
+          'SkillEvaluator status',
+          `  enabled:    ${config.skillEvaluator.enabled}`,
+          `  mode:       ${config.skillEvaluator.mode}`,
+          `  tiers:      ${config.skillEvaluator.tiers.join(',')}`,
+          `  minScore:   ${config.skillEvaluator.minScore}`,
+          `  binary:     ${binary ?? 'not installed (using built-in Tier 1 fallback; run: don skills install)'}`,
+          `  discovered: ${discoveredSkills.length} skill(s)`,
+          `  history:    ${recordedRuns} recorded run(s)`,
+        ],
+        out,
+      );
+      return 0;
+    }
+
+    if (action === 'eval') {
+      const parsedTiers = parseTiersFlag(parsed.values.tiers);
+      if (parsedTiers === 'invalid') {
+        writeLine(
+          errOut,
+          `Invalid --tiers "${String(parsed.values.tiers)}". Expected comma-separated list from: 1, 2, 3`,
+        );
+        return 2;
+      }
+      const parsedMinScore = parseMinScoreFlag(parsed.values['min-score']);
+      if (parsedMinScore === 'invalid') {
+        writeLine(
+          errOut,
+          `Invalid --min-score "${String(parsed.values['min-score'])}". Expected integer 0..100`,
+        );
+        return 2;
+      }
+
+      const config = loadDonConfig(dir);
+      let db: DonDatabase | undefined;
+      if (existsSync(dbPath)) {
+        db = openDonDb(dbPath);
+      }
+      try {
+        const gate = await runSkillGate({
+          cwd: dir,
+          targetPath: targetArg,
+          config,
+          db,
+          faux: useFaux,
+          tiers: parsedTiers,
+          minScore: parsedMinScore,
+        });
+        const humanLines = [
+          gate.summary,
+          ...gate.reports.map(
+            (r) =>
+              `  - ${r.skillName}: ${r.status} score=${r.score}/${r.minScore} engine=${r.engine} certified=${String(r.certified)} critical=${r.severityCounts.critical} high=${r.severityCounts.high}`,
+          ),
+        ];
+        emitResult(asJson, gate, humanLines, out);
+        return gate.blocked ? 1 : 0;
+      } finally {
+        db?.close();
+      }
+    }
+
+    if (action === 'harness') {
+      const config = loadDonConfig(dir);
+      const targets = targetArg
+        ? discoverSkillDirs(resolve(dir, targetArg), ['.'])
+        : discoverSkillDirs(dir, config.skillEvaluator.skillPaths);
+
+      if (targets.length === 0) {
+        const payload = { evaluatedCount: 0, results: [] };
+        emitResult(
+          asJson,
+          payload,
+          [
+            targetArg
+              ? `No SKILL.md found under "${targetArg}".`
+              : `No skills discovered in ${dir}.`,
+          ],
+          out,
+        );
+        return 0;
+      }
+
+      const results: SkillHarnessCheckResult[] = [];
+      for (const skillDir of targets) {
+        results.push(
+          await runSkillHarnessCheck({
+            targetPath: skillDir,
+            cwd: dir,
+            forceFallback: useFaux,
+          }),
+        );
+      }
+      const humanLines: string[] = [];
+      for (const res of results) {
+        humanLines.push(res.summary);
+        for (const row of res.rows) {
+          const detail = row.findings[0] ?? row.notes[0] ?? 'ok';
+          humanLines.push(`  - ${row.harness}: ${row.status} (${detail})`);
+        }
+      }
+      emitResult(asJson, { evaluatedCount: results.length, results }, humanLines, out);
+      return 0;
+    }
+
+    if (action === 'history') {
+      if (!existsSync(dbPath)) {
+        const payload = { dbExists: false, runs: [] };
+        emitResult(
+          asJson,
+          payload,
+          [`No workspace database at ${dbPath} (run "don init" first).`],
+          out,
+        );
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const runs = listSkillEvalRuns(db, { limit: 25 });
+        const humanLines =
+          runs.length === 0
+            ? ['No SkillEvaluator runs recorded yet.']
+            : [
+                `SkillEvaluator history (${runs.length} run${runs.length === 1 ? '' : 's'}):`,
+                ...runs.map(
+                  (r) =>
+                    `  - ${r.id} ${r.skillName} [${r.status}] score=${r.score}/${r.minScore} engine=${r.engine} critical=${r.criticalCount} high=${r.highCount}`,
+                ),
+              ];
+        emitResult(asJson, { dbExists: true, runs }, humanLines, out);
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'block' || action === 'log-only') {
+      const config = loadDonConfig(dir);
+      const updated: DonConfig = {
+        ...config,
+        skillEvaluator: {
+          ...config.skillEvaluator,
+          mode: action,
+        },
+      };
+      const configPath = saveDonConfig(donDir, updated);
+      const payload = { ok: true, mode: action, configPath };
+      emitResult(
+        asJson,
+        payload,
+        [`Updated skillEvaluator mode to "${action}" in ${configPath}`],
+        out,
+      );
+      return 0;
+    }
+
+    if (action === 'install') {
+      const tier1Cmds = getSkillEvaluatorInstallCommand({ allTiers: false });
+      const allTierCmds = getSkillEvaluatorInstallCommand({ allTiers: true });
+      const payload = {
+        tier1: tier1Cmds,
+        allTiers: allTierCmds,
+        docs: tier1Cmds.docs,
+      };
+      emitResult(
+        asJson,
+        payload,
+        [
+          'Install NVIDIA SkillEvaluator CLI (Python 3.12-3.14):',
+          `  Tier 1 (uv):     ${tier1Cmds.uv}`,
+          `  All tiers (uv):  ${allTierCmds.uv}`,
+          `  pip:             ${tier1Cmds.pip}`,
+          `  Repo & docs:     ${tier1Cmds.docs}`,
+        ],
+        out,
+      );
+      return 0;
+    }
+
+    writeLine(
+      errOut,
+      `Unknown skills subcommand "${action}". Expected: status, eval, harness, history, block, log-only, install`,
     );
     return 2;
   }

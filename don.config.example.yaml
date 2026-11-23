@@ -46,3 +46,21 @@ team:
   maxConsecutiveFailures: 2
   maxVerifierLoops: 3
   worktreeDir: .don/worktrees
+
+skillEvaluator:
+  enabled: true
+  # Block merges/pushes when a skill fails quality, security, PII, or Unicode smuggling checks.
+  mode: block
+  tiers:
+    - 1
+  minScore: 70
+  profile: default
+  noLlm: true
+  requireBinary: false
+  blockOnDedup: true
+  blockOnAgentEval: false
+  envMode: local
+  skillPaths:
+    - skills
+    - .agents/skills
+    - .claude/skills

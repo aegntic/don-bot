@@ -28,4 +28,5 @@ export * from './db.ts';
 export * from './events.ts';
 export * from './memory.ts';
 export * from './runtime.ts';
+export * from './skill-evals.ts';
 export * from './turn-lock.ts';

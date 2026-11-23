@@ -15,4 +15,5 @@ export * from './cooldown.ts';
 export * from './writer-lease.ts';
 export * from './worktree.ts';
 export * from './code-gate.ts';
+export * from './skill-gate.ts';
 export * from './orchestrator.ts';

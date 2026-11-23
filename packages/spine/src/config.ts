@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { SkillEvaluatorMode, SkillEvaluatorTier } from '@don-bot/trust';
 import { getBuiltinModels, type BuiltinProvider } from '@earendil-works/pi-ai/providers/all';
 import YAML from 'yaml';
 
@@ -10,6 +11,20 @@ export interface TierModelConfig {
   readonly provider: string;
   readonly model: string;
   readonly thinking: ThinkingSetting;
+}
+
+export interface SkillEvaluatorConfig {
+  readonly enabled: boolean;
+  readonly mode: SkillEvaluatorMode;
+  readonly tiers: readonly SkillEvaluatorTier[];
+  readonly minScore: number;
+  readonly profile: string;
+  readonly noLlm: boolean;
+  readonly requireBinary: boolean;
+  readonly blockOnDedup: boolean;
+  readonly blockOnAgentEval: boolean;
+  readonly envMode: string;
+  readonly skillPaths: readonly string[];
 }
 
 export interface DonConfig {
@@ -38,6 +53,7 @@ export interface DonConfig {
     readonly maxVerifierLoops: number;
     readonly worktreeDir: string;
   };
+  readonly skillEvaluator: SkillEvaluatorConfig;
 }
 
 export const DEFAULT_DON_CONFIG: DonConfig = {
@@ -71,11 +87,25 @@ export const DEFAULT_DON_CONFIG: DonConfig = {
     maxVerifierLoops: 3,
     worktreeDir: '.don/worktrees',
   },
+  skillEvaluator: {
+    enabled: true,
+    mode: 'block',
+    tiers: [1],
+    minScore: 70,
+    profile: 'default',
+    noLlm: true,
+    requireBinary: false,
+    blockOnDedup: true,
+    blockOnAgentEval: false,
+    envMode: 'local',
+    skillPaths: ['skills', '.agents/skills', '.claude/skills'],
+  },
 };
 
 function mergeConfig(raw: Record<string, unknown> | null | undefined): DonConfig {
   if (!raw || typeof raw !== 'object') return DEFAULT_DON_CONFIG;
   const modelsRaw = (raw.models as Record<string, Partial<TierModelConfig>> | undefined) ?? {};
+  const skillEvalRaw = raw.skillEvaluator as Partial<SkillEvaluatorConfig> | undefined;
   return {
     models: {
       architect: { ...DEFAULT_DON_CONFIG.models.architect, ...modelsRaw.architect },
@@ -98,6 +128,18 @@ function mergeConfig(raw: Record<string, unknown> | null | undefined): DonConfig
     team: {
       ...DEFAULT_DON_CONFIG.team,
       ...(raw.team as Partial<DonConfig['team']> | undefined),
+    },
+    skillEvaluator: {
+      ...DEFAULT_DON_CONFIG.skillEvaluator,
+      ...skillEvalRaw,
+      tiers:
+        Array.isArray(skillEvalRaw?.tiers) && skillEvalRaw.tiers.length > 0
+          ? skillEvalRaw.tiers
+          : DEFAULT_DON_CONFIG.skillEvaluator.tiers,
+      skillPaths:
+        Array.isArray(skillEvalRaw?.skillPaths) && skillEvalRaw.skillPaths.length > 0
+          ? skillEvalRaw.skillPaths
+          : DEFAULT_DON_CONFIG.skillEvaluator.skillPaths,
     },
   };
 }

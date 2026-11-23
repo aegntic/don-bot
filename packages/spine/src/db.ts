@@ -140,6 +140,35 @@ CREATE TABLE IF NOT EXISTS don_task_failures (
   last_error TEXT,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS don_skill_evals (
+  id TEXT PRIMARY KEY,
+  run_id TEXT,
+  task_id TEXT,
+  agent_id TEXT,
+  skill_name TEXT NOT NULL,
+  skill_path TEXT NOT NULL,
+  engine TEXT NOT NULL,
+  tiers_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  passed INTEGER NOT NULL,
+  certified INTEGER NOT NULL,
+  score INTEGER NOT NULL,
+  min_score INTEGER NOT NULL,
+  critical_count INTEGER NOT NULL DEFAULT 0,
+  high_count INTEGER NOT NULL DEFAULT 0,
+  medium_count INTEGER NOT NULL DEFAULT 0,
+  low_count INTEGER NOT NULL DEFAULT 0,
+  incomplete_scans_json TEXT NOT NULL,
+  findings_json TEXT NOT NULL,
+  harness_json TEXT NOT NULL,
+  report_dir TEXT,
+  summary TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_don_skill_evals_skill ON don_skill_evals(skill_path, created_at);
+CREATE INDEX IF NOT EXISTS idx_don_skill_evals_task ON don_skill_evals(task_id, created_at);
 `;
 
 export class DonDatabase {
