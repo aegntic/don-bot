@@ -32,6 +32,7 @@ Set any **one** provider key in your environment — any unspecified model tier 
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
+export TYPESAFE_API_KEY="ts-..."         # optional: System-One jev-1.14.0 decision gates (or auto-uses OPENROUTER_API_KEY -> typesafe/jev-1.14)
 ```
 
 Then initialize and run against any repository:
@@ -54,7 +55,7 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 | `don status [--dir <path>]` | Report SQLite WAL status, `safeagents` guard mode, budget caps, queue counts, and active worktrees |
 | `don serve [--port <n>] [--host <addr>]` | Start the authenticated A2UI `v1.0` / SSE 3-pane Liquid PWA Cockpit server (`127.0.0.1:4321`) |
 | `don resume [--dir <path>]` | Inspect paused/interrupted tasks, incomplete `once()` memos, blocked cooldowns, and Decision Deck cards |
-| `don guard <status\|rust-status\|block\|log-only\|install>` | Check `safeagents` or compiled Rust `don-guard` binary status and toggle guard mode |
+| `don guard <status\|rust-status\|jev-status\|block\|log-only\|install>` | Check `safeagents`, compiled Rust `don-guard`, or Jev System-One config & toggle guard mode |
 | `don vault <set\|list>` | Store or list host-bound AES-256-GCM Blind Vault credentials (never echoes secret plaintext) |
 | `don rollback <create\|list>` | Create or list HMAC-SHA256 signed git worktree + SQLite rollback checkpoints |
 | `don channel status` | Inspect `@mtcute/bun` Telegram "Me" Mode driver, `EXCLUSIONS.txt`, and tunnel tools |
@@ -111,6 +112,7 @@ bun run don skills harness --dir /path/to/your-repo
 | `tests/chaos/08-slice03-don-guard-jev-vault.test.ts` | Compiled Rust `don-guard` binary, Blind Vault `AES-256-GCM`, `trust-jev` Shadow Mode & signed rollbacks |
 | `tests/chaos/09-slice04-telegram-firewall.test.ts` | `@mtcute/bun` native SQLite, two-zone outbound firewall, `EXCLUSIONS.txt`, Inline Buttons & STT routing |
 | `tests/chaos/10-slice05-a2ui-cockpit.test.ts` | A2UI `v1.0` `don.catalog.v1`, TS Macro Expander, `.don/access-key` SSE, Preview CSP & headless Chromium CDP |
+| `tests/chaos/11-jev-system-one-agents.test.ts` | Live Jev wire protocol (`typesafe`/`openrouter`/`openai`), 45-feature GBDT ensemble, and 5 factory Jev gates |
 
 ---
 

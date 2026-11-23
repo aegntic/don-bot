@@ -14,16 +14,23 @@ import {
   openDonSpine,
   opt,
   recordTurn,
+  resolveConfiguredJevClient,
   type ResolvedTierModel,
   resolveTierModel,
   str,
   updateTurnStatus,
 } from '@don-bot/spine';
-import { discoverSkillDirs, ensureAccessKey, type SafeAgentsMode } from '@don-bot/trust';
+import {
+  discoverSkillDirs,
+  ensureAccessKey,
+  type JevDecisionPort,
+  type SafeAgentsMode,
+} from '@don-bot/trust';
 import { type CodeGateEnvelope, runCodeGate } from './code-gate.ts';
 import { type AgentRoleId, buildStaticPromptPrefix, getAgentProfile } from './roster.ts';
 import {
   classifyTaskComplexity,
+  classifyTaskComplexityWithJev,
   closeRoom,
   createRoom,
   postRoomMessage,
@@ -39,6 +46,7 @@ export interface RunTeamGoalOptions {
   readonly faux?: boolean;
   readonly role?: AgentRoleId;
   readonly config?: DonConfig;
+  readonly jevClient?: JevDecisionPort;
   readonly safeAgentsMode?: SafeAgentsMode;
   readonly verifyCodeGate?: boolean;
   readonly verifySkillGate?: boolean;
@@ -69,7 +77,18 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
 
   const dbPath = join(donDir, 'factory.sqlite');
   const config = options.config ?? loadDonConfig(dir);
-  const complexity = classifyTaskComplexity(options.goal, config.team.debateMode);
+  const useFauxModel =
+    Boolean(options.faux) ||
+    resolveTierModel(config, 'architect', { faux: options.faux }).provider === 'faux';
+  const activeJev = resolveConfiguredJevClient(config, {
+    faux: useFauxModel,
+    overrideClient: options.jevClient,
+  });
+
+  const complexity =
+    activeJev && config.jev.enabled && config.jev.routeComplexity
+      ? await classifyTaskComplexityWithJev(options.goal, config.team.debateMode, activeJev)
+      : classifyTaskComplexity(options.goal, config.team.debateMode);
 
   const activeRole: AgentRoleId =
     options.role ??
@@ -146,6 +165,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
     dbPath,
     config,
     faux: useFaux,
+    jevClient: activeJev ?? undefined,
     cwd: dir,
     safeAgentsMode: options.safeAgentsMode ?? config.safeagents.mode,
     extraExtensions: [teamExt],
@@ -242,6 +262,10 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
       taskId,
       agentId: activeRole,
       tier: activeProfile.modelTier,
+    });
+    spine.setActiveTurn(convId, {
+      turnId,
+      ownerQuote: options.goal,
     });
 
     const submission = await conv.submit(

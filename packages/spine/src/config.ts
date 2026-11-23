@@ -1,6 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SkillEvaluatorMode, SkillEvaluatorTier } from '@don-bot/trust';
+import {
+  createLiveJevClient,
+  resolveJevConnection,
+  type JevDecisionPort,
+  type SkillEvaluatorMode,
+  type SkillEvaluatorTier,
+} from '@don-bot/trust';
 import { getBuiltinModels, type BuiltinProvider } from '@earendil-works/pi-ai/providers/all';
 import YAML from 'yaml';
 
@@ -25,6 +31,20 @@ export interface SkillEvaluatorConfig {
   readonly blockOnAgentEval: boolean;
   readonly envMode: string;
   readonly skillPaths: readonly string[];
+}
+
+export interface JevConfig {
+  readonly enabled: boolean;
+  readonly provider: 'auto' | 'typesafe' | 'openrouter' | 'openai' | 'faux' | 'off';
+  readonly model: string;
+  readonly timeoutMs: number;
+  readonly minConfidence: number;
+  readonly enforceShadowMode: boolean;
+  readonly gateTools: boolean;
+  readonly routeComplexity: boolean;
+  readonly verifyStop: boolean;
+  readonly filterMemory: boolean;
+  readonly gateOutbound: boolean;
 }
 
 export interface DonConfig {
@@ -54,6 +74,7 @@ export interface DonConfig {
     readonly worktreeDir: string;
   };
   readonly skillEvaluator: SkillEvaluatorConfig;
+  readonly jev: JevConfig;
 }
 
 export const DEFAULT_DON_CONFIG: DonConfig = {
@@ -100,12 +121,26 @@ export const DEFAULT_DON_CONFIG: DonConfig = {
     envMode: 'local',
     skillPaths: ['skills', '.agents/skills', '.claude/skills'],
   },
+  jev: {
+    enabled: true,
+    provider: 'auto',
+    model: 'auto',
+    timeoutMs: 1500,
+    minConfidence: 0.85,
+    enforceShadowMode: true,
+    gateTools: true,
+    routeComplexity: true,
+    verifyStop: true,
+    filterMemory: true,
+    gateOutbound: true,
+  },
 };
 
 function mergeConfig(raw: Record<string, unknown> | null | undefined): DonConfig {
   if (!raw || typeof raw !== 'object') return DEFAULT_DON_CONFIG;
   const modelsRaw = (raw.models as Record<string, Partial<TierModelConfig>> | undefined) ?? {};
   const skillEvalRaw = raw.skillEvaluator as Partial<SkillEvaluatorConfig> | undefined;
+  const jevRaw = raw.jev as Partial<JevConfig> | undefined;
   return {
     models: {
       architect: { ...DEFAULT_DON_CONFIG.models.architect, ...modelsRaw.architect },
@@ -140,6 +175,10 @@ function mergeConfig(raw: Record<string, unknown> | null | undefined): DonConfig
         Array.isArray(skillEvalRaw?.skillPaths) && skillEvalRaw.skillPaths.length > 0
           ? skillEvalRaw.skillPaths
           : DEFAULT_DON_CONFIG.skillEvaluator.skillPaths,
+    },
+    jev: {
+      ...DEFAULT_DON_CONFIG.jev,
+      ...jevRaw,
     },
   };
 }
@@ -263,4 +302,32 @@ export function resolveTierModel(
     thinking: tierCfg.thinking,
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
   };
+}
+
+/**
+ * Resolve the configured System-One Jev decision client unless explicitly disabled or overridden.
+ */
+export function resolveConfiguredJevClient(
+  config: DonConfig,
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly faux?: boolean;
+    readonly overrideClient?: JevDecisionPort;
+  } = {},
+): JevDecisionPort | null {
+  if (!config.jev.enabled) return null;
+  if (options.overrideClient) return options.overrideClient;
+  if (options.faux) return null;
+
+  const conn = resolveJevConnection({
+    env: options.env,
+    provider: config.jev.provider,
+    model: config.jev.model,
+    faux: false,
+  });
+  if (!conn) return null;
+
+  return createLiveJevClient(conn, {
+    timeoutMs: Math.max(1000, config.jev.timeoutMs * 4),
+  });
 }

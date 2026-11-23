@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { appendEvent, type DonConfig, type DonDatabase, loadDonConfig } from '@don-bot/spine';
+import type { JevDecisionPort } from '@don-bot/trust';
 import { type CodeGateEnvelope, runCodeGate } from './code-gate.ts';
 import { recordTaskFailure, resetTaskCooldown, type TaskFailureState } from './cooldown.ts';
 import { runSkillGate, type SkillGateEnvelope } from './skill-gate.ts';
@@ -26,6 +27,13 @@ export interface ClaimCheckResult {
   readonly detail: string;
 }
 
+export interface JevSemanticVerdict {
+  readonly passed: boolean;
+  readonly satisfiesGoal: number;
+  readonly scopeCreep: number;
+  readonly reason: string;
+}
+
 export interface VerifierResult {
   readonly passed: boolean;
   readonly cwd: string;
@@ -33,6 +41,7 @@ export interface VerifierResult {
   readonly taskFingerprint: string;
   readonly codeGate: CodeGateEnvelope;
   readonly skillGate?: SkillGateEnvelope;
+  readonly jevVerdict?: JevSemanticVerdict;
   readonly claimResults: readonly ClaimCheckResult[];
   readonly failureState?: TaskFailureState;
   readonly summary: string;
@@ -44,6 +53,9 @@ export interface RunTopDownVerifierOptions {
   readonly config?: DonConfig;
   readonly taskId: string;
   readonly taskFingerprint: string;
+  readonly goal?: string;
+  readonly diffSummary?: string;
+  readonly jevClient?: JevDecisionPort | null;
   readonly claims?: readonly VerifierClaim[];
   readonly runLint?: boolean;
   readonly runFmtCheck?: boolean;
@@ -132,21 +144,94 @@ export async function runTopDownVerifier(
   const claimResults = (options.claims ?? []).map((c) => evaluateClaim(cwd, c));
   const failedClaims = claimResults.filter((c) => !c.passed);
 
-  const passed =
+  let jevVerdict: JevSemanticVerdict | undefined;
+  const preSemanticPass =
     codeGate.passed && (skillGate === undefined || !skillGate.blocked) && failedClaims.length === 0;
+
+  if (
+    preSemanticPass &&
+    options.jevClient &&
+    options.goal &&
+    config.jev.enabled &&
+    config.jev.verifyStop
+  ) {
+    try {
+      const check = await options.jevClient.check({
+        instructions:
+          'Verify whether the completed worktree change satisfies the owner goal cleanly without scope creep or regression.',
+        input: {
+          goal: options.goal,
+          diffSummary: options.diffSummary ?? '',
+          codeGateSummary: codeGate.summary,
+          claimResults,
+        },
+        questions: [
+          {
+            name: 'satisfies_goal',
+            kind: 'noul',
+            instructions:
+              'Does the diff & verified checks actually satisfy the requested owner goal?',
+          },
+          {
+            name: 'scope_creep_or_regression',
+            kind: 'noul',
+            instructions:
+              'Does the change introduce unrequested scope creep, unintended side effects, or semantic regressions?',
+          },
+        ],
+      });
+
+      const goalAns = check.answers.satisfies_goal;
+      const creepAns = check.answers.scope_creep_or_regression;
+      if (check.refused || !goalAns || !creepAns || goalAns.refused || creepAns.refused) {
+        jevVerdict = {
+          passed: false,
+          satisfiesGoal: 0,
+          scopeCreep: 1,
+          reason: 'Jev verifier refused or returned incomplete answer (fail-closed).',
+        };
+      } else {
+        const satisfiesGoal =
+          goalAns.rawChoice === true ? goalAns.probability : 1 - goalAns.probability;
+        const scopeCreep =
+          creepAns.rawChoice === true ? creepAns.probability : 1 - creepAns.probability;
+        const semanticPass = satisfiesGoal >= config.jev.minConfidence && scopeCreep < 0.6;
+        jevVerdict = {
+          passed: semanticPass,
+          satisfiesGoal,
+          scopeCreep,
+          reason: semanticPass
+            ? `Jev semantic PASS (goal=${satisfiesGoal.toFixed(2)}, creep=${scopeCreep.toFixed(2)})`
+            : `Jev semantic FAIL (goal=${satisfiesGoal.toFixed(2)} min=${config.jev.minConfidence.toFixed(2)}, creep=${scopeCreep.toFixed(2)})`,
+        };
+      }
+    } catch {
+      jevVerdict = {
+        passed: false,
+        satisfiesGoal: 0,
+        scopeCreep: 1,
+        reason: 'Jev verifier errored or timed out (fail-closed).',
+      };
+    }
+  }
+
+  const passed = preSemanticPass && (jevVerdict === undefined || jevVerdict.passed);
 
   let summary = '';
   let failureState: TaskFailureState | undefined;
 
   if (passed) {
     resetTaskCooldown(options.db, options.taskFingerprint);
-    summary = `Verifier PASS (${codeGate.steps.length} oxc/test stages, ${claimResults.length}/${claimResults.length} atomic claims).`;
+    summary = `Verifier PASS (${codeGate.steps.length} oxc/test stages, ${claimResults.length}/${claimResults.length} atomic claims${jevVerdict ? `, ${jevVerdict.reason}` : ''}).`;
   } else {
     const reasons: string[] = [];
     if (!codeGate.passed) reasons.push(codeGate.summary);
     if (skillGate?.blocked) reasons.push(skillGate.summary);
     if (failedClaims.length > 0) {
       reasons.push(`Failed claims: ${failedClaims.map((c) => c.detail).join('; ')}`);
+    }
+    if (jevVerdict && !jevVerdict.passed) {
+      reasons.push(jevVerdict.reason);
     }
     const errText = reasons.join(' | ');
     failureState = recordTaskFailure(options.db, config, {
@@ -171,6 +256,7 @@ export async function runTopDownVerifier(
       claimCount: claimResults.length,
       failedClaims: failedClaims.length,
       cooldownStatus: failureState?.status ?? 'active',
+      ...(jevVerdict ? { jevVerdict } : {}),
     },
   });
 
@@ -181,6 +267,7 @@ export async function runTopDownVerifier(
     taskFingerprint: options.taskFingerprint,
     codeGate,
     skillGate,
+    ...(jevVerdict ? { jevVerdict } : {}),
     claimResults,
     failureState,
     summary,

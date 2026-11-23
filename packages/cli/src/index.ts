@@ -41,6 +41,9 @@ import {
   ensureAccessKey,
   getSafeAgentsInstallCommand,
   getSkillEvaluatorInstallCommand,
+  JEV_MODEL_FEATURES,
+  JEV_MODEL_THRESHOLD,
+  resolveJevConnection,
   runSkillHarnessCheck,
   type SkillEvaluatorTier,
   type SkillHarnessCheckResult,
@@ -81,7 +84,7 @@ function renderHelp(): string {
     '  serve                            Start local A2UI v1.0 / SSE 3-pane cockpit server',
     '  status                           Show SQLite WAL, safeagents, budget caps, queue & worktree status',
     '  resume                           Inspect paused/interrupted tasks, once() memos & Decision Deck cards',
-    '  guard <status|rust-status|block|log-only|install>   Inspect or toggle security guard modes',
+    '  guard <status|rust-status|jev-status|block|log-only|install>   Inspect or toggle security guard modes',
     '  vault <set|list>                 Store or inspect Blind Vault credentials (never echoes secrets)',
     '  rollback <create|list>           Create or list HMAC-signed git+SQLite rollback checkpoints',
     '  channel status                   Inspect Telegram Me Mode (@mtcute/bun) & EXCLUSIONS.txt',
@@ -493,6 +496,48 @@ export async function runCli(
       return health.ok ? 0 : 1;
     }
 
+    if (action === 'jev-status') {
+      const config = loadDonConfig(dir);
+      const conn = resolveJevConnection({
+        provider: config.jev.provider,
+        model: config.jev.model,
+        faux: useFaux,
+      });
+      const payload = {
+        enabled: config.jev.enabled,
+        provider: config.jev.provider,
+        resolvedProvider: conn?.provider ?? null,
+        model: conn?.model ?? config.jev.model,
+        apiKeyEnv: conn?.apiKeyEnv ?? null,
+        configured: Boolean(conn),
+        gbdtFeatures: JEV_MODEL_FEATURES.length,
+        gbdtThreshold: JEV_MODEL_THRESHOLD,
+        timeoutMs: config.jev.timeoutMs,
+        minConfidence: config.jev.minConfidence,
+        enforceShadowMode: config.jev.enforceShadowMode,
+        gates: {
+          gateTools: config.jev.gateTools,
+          routeComplexity: config.jev.routeComplexity,
+          verifyStop: config.jev.verifyStop,
+          filterMemory: config.jev.filterMemory,
+          gateOutbound: config.jev.gateOutbound,
+        },
+      };
+      emitResult(
+        asJson,
+        payload,
+        [
+          'Jev System-One decision layer status',
+          `  enabled:    ${payload.enabled}`,
+          `  configured: ${payload.configured} (provider=${payload.resolvedProvider ?? 'none'}, model=${payload.model}, env=${payload.apiKeyEnv ?? 'unset'})`,
+          `  gbdt:       ${payload.gbdtFeatures} features (threshold=${payload.gbdtThreshold.toFixed(4)})`,
+          `  gates:      tools=${payload.gates.gateTools} complexity=${payload.gates.routeComplexity} verify=${payload.gates.verifyStop} memory=${payload.gates.filterMemory} outbound=${payload.gates.gateOutbound}`,
+        ],
+        out,
+      );
+      return 0;
+    }
+
     if (action === 'block' || action === 'log-only') {
       const config = loadDonConfig(dir);
       const updated: DonConfig = {
@@ -531,7 +576,7 @@ export async function runCli(
 
     writeLine(
       errOut,
-      `Unknown guard subcommand "${action}". Expected: status, rust-status, block, log-only, install`,
+      `Unknown guard subcommand "${action}". Expected: status, rust-status, jev-status, block, log-only, install`,
     );
     return 2;
   }

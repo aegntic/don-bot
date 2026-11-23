@@ -152,6 +152,7 @@ function queryGuardEvents(db: DonDatabase, limit: number): DonEventRecord[] {
     .filter((ev) => {
       const payload = toRecord(ev.payload);
       return (
+        (ev.kind === 'jev' && payload.decision !== 'always_allow') ||
         (ev.kind === 'decision' &&
           (payload.verdict !== undefined ||
             payload.layer !== undefined ||

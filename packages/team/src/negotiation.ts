@@ -1,6 +1,8 @@
 import type { DonConfig, DonDatabase } from '@don-bot/spine';
+import type { JevDecisionPort } from '@don-bot/trust';
 import {
   classifyTaskComplexity,
+  classifyTaskComplexityWithJev,
   closeRoom,
   createRoom,
   postRoomMessage,
@@ -37,8 +39,11 @@ export interface RunNegotiationOptions {
 export function runNegotiationRoom(
   db: DonDatabase,
   options: RunNegotiationOptions,
+  precomputedComplexity?: TaskComplexityResult,
 ): NegotiationResult {
-  const complexity = classifyTaskComplexity(options.goal, options.debateMode ?? 'complexity-gated');
+  const complexity =
+    precomputedComplexity ??
+    classifyTaskComplexity(options.goal, options.debateMode ?? 'complexity-gated');
   const specialists = complexity.recommendedRoles.filter((r) => r !== 'lead');
 
   if (!complexity.shouldOpenRoom) {
@@ -134,4 +139,19 @@ export function runNegotiationRoom(
     messages,
     assignments,
   };
+}
+
+/**
+ * Async negotiation entry point that classifies complexity via System-One Jev when configured.
+ */
+export async function runNegotiationRoomAsync(
+  db: DonDatabase,
+  options: RunNegotiationOptions & { readonly jevClient?: JevDecisionPort | null },
+): Promise<NegotiationResult> {
+  const complexity = await classifyTaskComplexityWithJev(
+    options.goal,
+    options.debateMode ?? 'complexity-gated',
+    options.jevClient,
+  );
+  return runNegotiationRoom(db, options, complexity);
 }

@@ -11,6 +11,7 @@ export type DonEventKind =
   | 'decision'
   | 'budget'
   | 'skill_eval'
+  | 'jev'
   | 'a2ui'
   | 'verifier'
   | 'channel'

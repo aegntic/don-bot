@@ -1,8 +1,12 @@
 import { dirname, join } from 'node:path';
 import {
+  createCalibratedTrustEvaluatorFromJev,
+  evaluateTrustGate,
   extractHostsFromText,
   inspectToolCallDeterministic,
   wrapToolTextContent,
+  type JevCheckResult,
+  type JevDecisionPort,
   type SafeAgentsMode,
 } from '@don-bot/trust';
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context';
@@ -35,9 +39,14 @@ import {
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { bool, num, obj, opt, str } from '@earendil-works/pi-schema';
-import { enforceBudget, getBudgetSnapshot, recordUsage } from './budget.ts';
+import { createDecisionCard, enforceBudget, getBudgetSnapshot, recordUsage } from './budget.ts';
 import { createSelfCompactExtension } from './compact.ts';
-import { loadDonConfig, type DonConfig, type ModelTier } from './config.ts';
+import {
+  loadDonConfig,
+  resolveConfiguredJevClient,
+  type DonConfig,
+  type ModelTier,
+} from './config.ts';
 import { openDonDb, type DonDatabase } from './db.ts';
 import { appendEvent, INTERRUPTED_TOOL_MESSAGE } from './events.ts';
 
@@ -47,6 +56,9 @@ export interface OpenDonSpineOptions {
   readonly models?: Models;
   readonly faux?: boolean;
   readonly fauxProvider?: FauxProviderHandle;
+  readonly jevClient?: JevDecisionPort;
+  readonly mutatingTools?: readonly string[];
+  readonly readOnlyTools?: readonly string[];
   readonly ownerAuthorizedHosts?: readonly string[];
   readonly safeAgentsMode?: SafeAgentsMode;
   readonly extraExtensions?: readonly Extension[];
@@ -62,6 +74,11 @@ export interface TaskBudgetContext {
   readonly tier?: ModelTier;
 }
 
+export interface ActiveTurnContext {
+  readonly turnId: string;
+  readonly ownerQuote?: string;
+}
+
 export interface DonSpineRuntime {
   readonly db: DonDatabase;
   readonly storage: Storage;
@@ -70,9 +87,11 @@ export interface DonSpineRuntime {
   readonly models: Models;
   readonly config: DonConfig;
   readonly faux?: FauxProviderHandle;
+  readonly jevClient: JevDecisionPort | null;
   updateContextTokens(conversationId: number, usedTokens: number): void;
   setContextWindow(conversationId: number, contextWindow: number): void;
   setTaskContext(conversationId: number, ctx: TaskBudgetContext): void;
+  setActiveTurn(conversationId: number, turn: ActiveTurnContext): void;
   getBudgetForConversation(conversationId: number): ReturnType<typeof getBudgetSnapshot>;
   close(): Promise<void>;
 }
@@ -130,9 +149,22 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
   const contextTokens = new Map<number, number>();
   const contextWindows = new Map<number, number>();
   const taskContexts = new Map<number, TaskBudgetContext>();
+  const activeTurns = new Map<number, ActiveTurnContext>();
   const defaultWindow = options.defaultContextWindow ?? 128_000;
   const authorizedHosts = new Set(options.ownerAuthorizedHosts ?? []);
   const inspectionMode = options.safeAgentsMode ?? config.safeagents.mode;
+  const activeJevClient = resolveConfiguredJevClient(config, {
+    faux: options.faux,
+    overrideClient: options.jevClient,
+  });
+  const readOnlyToolSet = new Set([
+    'self_compact',
+    'read_file',
+    'list_files',
+    'record_lane_handoff',
+    'evaluate_skill',
+    ...(options.readOnlyTools ?? []),
+  ]);
 
   const selfCompactExt = createSelfCompactExtension({
     db,
@@ -238,7 +270,7 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
     name: 'don-trust-boundary',
     hooks: [
       hook(ToolTask, {
-        beforeTool(call, api) {
+        async beforeTool(call, api) {
           if (call.name === 'self_compact') return undefined;
           const declaredTools = registry
             .snapshot()
@@ -262,6 +294,89 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
               return { block: `[safeagents] ${verdict.reasons.join('; ')}` };
             }
           }
+
+          if (activeJevClient && config.jev.enabled && config.jev.gateTools) {
+            const isMutating = options.mutatingTools
+              ? options.mutatingTools.includes(call.name)
+              : !readOnlyToolSet.has(call.name);
+            if (isMutating) {
+              const convId = Number(api.conversationId);
+              const taskCtx = taskContexts.get(convId);
+              const taskId = taskCtx?.taskId ?? `conv:${convId}`;
+              const activeTurn = activeTurns.get(convId);
+              let lastJevResult: JevCheckResult | undefined;
+
+              const evalRes = await evaluateTrustGate({
+                db: db.raw,
+                toolName: call.name,
+                payload: call.arguments,
+                quotedTurnId: activeTurn?.turnId,
+                ownerQuote: activeTurn?.ownerQuote,
+                isMutating: true,
+                enforceShadowMode: config.jev.enforceShadowMode,
+                minConfidence: config.jev.minConfidence,
+                timeoutMs: config.jev.timeoutMs,
+                evaluator: createCalibratedTrustEvaluatorFromJev(activeJevClient, {
+                  onResult: (res) => {
+                    lastJevResult = res;
+                  },
+                }),
+              });
+
+              if (lastJevResult) {
+                recordUsage(db, {
+                  runId: String(api.taskId),
+                  taskId,
+                  subagentRunId: taskCtx?.subagentRunId,
+                  agentId: taskCtx?.agentId ?? 'jev-gate',
+                  tier: 'gate',
+                  provider: activeJevClient.provider,
+                  modelId: activeJevClient.model,
+                  inputTokens: lastJevResult.usage.inputTokens,
+                  cachedTokens: lastJevResult.usage.cachedTokens,
+                  outputTokens: lastJevResult.usage.outputTokens,
+                  totalTokens: lastJevResult.usage.inputTokens + lastJevResult.usage.outputTokens,
+                  costUsd: lastJevResult.usage.costUsd,
+                });
+              }
+
+              appendEvent(db, {
+                idempotencyKey: `jev:${call.id}`,
+                runId: String(api.taskId),
+                agentId: taskCtx?.agentId,
+                conversationId: convId,
+                kind: 'jev',
+                payload: {
+                  layer: 'trust-jev',
+                  toolName: call.name,
+                  blockedTarget: call.name,
+                  decision: evalRes.decision,
+                  payloadHash: evalRes.payloadHash,
+                  reason: evalRes.reason,
+                  failClosed: evalRes.failClosed,
+                  ...(evalRes.confidence !== undefined ? { confidence: evalRes.confidence } : {}),
+                },
+              });
+
+              if (evalRes.decision === 'always_deny') {
+                return { block: `[jev:deny] ${evalRes.reason}` };
+              }
+              if (evalRes.decision === 'always_ask') {
+                const card = createDecisionCard(db, {
+                  sourceAgentId: taskCtx?.agentId ?? 'lead',
+                  taskId,
+                  kind: 'always_ask',
+                  question: `Approve mutating tool "${call.name}"? (${evalRes.reason})`,
+                  options: ['Approve once', 'Always allow this payload', 'Deny'],
+                  idempotencyKey: `jev:${call.name}:${evalRes.payloadHash}`,
+                });
+                return {
+                  block: `[jev:always_ask] Decision card ${card.id} opened (${evalRes.reason})`,
+                };
+              }
+            }
+          }
+
           return undefined;
         },
         afterTool(call, result) {
@@ -320,6 +435,7 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
     models,
     config,
     ...(fauxHandle ? { faux: fauxHandle } : {}),
+    jevClient: activeJevClient,
     updateContextTokens(conversationId, usedTokens) {
       contextTokens.set(conversationId, usedTokens);
     },
@@ -328,6 +444,9 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
     },
     setTaskContext(conversationId, ctx) {
       taskContexts.set(conversationId, ctx);
+    },
+    setActiveTurn(conversationId, turn) {
+      activeTurns.set(conversationId, turn);
     },
     getBudgetForConversation(conversationId) {
       const taskCtx = taskContexts.get(conversationId);
