@@ -11,6 +11,10 @@ export type DonEventKind =
   | 'decision'
   | 'budget'
   | 'skill_eval'
+  | 'a2ui'
+  | 'verifier'
+  | 'channel'
+  | 'rollback'
   | 'system';
 
 export interface DonEventRecord {

@@ -169,6 +169,56 @@ CREATE TABLE IF NOT EXISTS don_skill_evals (
 );
 CREATE INDEX IF NOT EXISTS idx_don_skill_evals_skill ON don_skill_evals(skill_path, created_at);
 CREATE INDEX IF NOT EXISTS idx_don_skill_evals_task ON don_skill_evals(task_id, created_at);
+
+CREATE TABLE IF NOT EXISTS don_step_snapshots (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  step_num INTEGER NOT NULL,
+  conversation_id INTEGER,
+  state_json TEXT NOT NULL,
+  worktree_ref TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(run_id, step_num)
+);
+CREATE INDEX IF NOT EXISTS idx_don_step_snapshots_run ON don_step_snapshots(run_id, step_num);
+
+CREATE TABLE IF NOT EXISTS don_rollbacks (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  git_ref TEXT NOT NULL,
+  db_seq INTEGER NOT NULL,
+  signature TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_don_rollbacks_task ON don_rollbacks(task_id, created_at);
+
+CREATE TABLE IF NOT EXISTS don_vault_items (
+  ref_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  allowed_hosts_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS don_tool_permissions (
+  id TEXT PRIMARY KEY,
+  tool_name TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  owner_turn_id TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(tool_name, payload_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_don_tool_perms_tool ON don_tool_permissions(tool_name, payload_hash);
+
+CREATE TABLE IF NOT EXISTS don_shadow_tools (
+  tool_name TEXT PRIMARY KEY,
+  first_seen_at INTEGER NOT NULL,
+  promoted_at INTEGER,
+  observations INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 export class DonDatabase {
