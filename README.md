@@ -2,7 +2,7 @@
 
 A single-box, local-first autonomous software factory powered by `@earendil-works/pi-durable`, `@earendil-works/chord`, SQLite WAL (`node:sqlite`), `oxc.rs` (`oxlint`/`oxfmt`), `huggingface/safeagents`, and [NVIDIA/SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator).
 
-> **Latest Release (`v0.6.0` on `main`):** Slices 01–06 are live at [github.com/aegntic/don-bot/releases/tag/v0.6.0](https://github.com/aegntic/don-bot/releases/tag/v0.6.0) and [don.aegntic.ai](https://don.aegntic.ai) (Durable Spine, 4-Layer Trust + Rust `don-guard` + System-One Jev + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, OAuth-First Onboarding, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Release `v0.1.0-slice-01` preserves the initial Slice 01 baseline.
+> **Pre-Release (`v0.6.0-rc.1` on `main`):** Slices 01–06 are available in pre-release at [github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1](https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1) alongside the v1.0 waitlist at [don.aegntic.ai](https://don.aegntic.ai) (Durable Spine, 4-Layer Trust + Rust `don-guard` + System-One Jev + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, OAuth-First Onboarding, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Pre-release `v0.1.0-slice-01` preserves the initial Slice 01 baseline.
 
 ---
 

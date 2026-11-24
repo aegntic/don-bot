@@ -8,9 +8,9 @@ import { UI_PLACEHOLDER } from '../../packages/ui/src/index.ts';
 
 describe('greenfield monorepo scaffold', () => {
   test('exports workspace packages cleanly', () => {
-    expect(TRUST_PACKAGE_VERSION).toBe('0.6.0');
-    expect(getSpineStatus().spine).toBe('0.6.0');
-    expect(getTeamStatus().team).toBe('0.6.0');
+    expect(TRUST_PACKAGE_VERSION).toBe('0.6.0-rc.1');
+    expect(getSpineStatus().spine).toBe('0.6.0-rc.1');
+    expect(getTeamStatus().team).toBe('0.6.0-rc.1');
     expect(formatVersionBanner()).toContain('don-bot');
     expect(CHANNELS_PLACEHOLDER).toContain('Slice 04');
     expect(UI_PLACEHOLDER).toContain('Slice 05');
