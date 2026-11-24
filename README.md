@@ -2,7 +2,7 @@
 
 A single-box, local-first autonomous software factory powered by `@earendil-works/pi-durable`, `@earendil-works/chord`, SQLite WAL (`node:sqlite`), `oxc.rs` (`oxlint`/`oxfmt`), `huggingface/safeagents`, and [NVIDIA/SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator).
 
-> **Branch Status (`dev/full-factory`):** Complete end-to-end build covering **Slices 01–06** (Durable Spine, 4-Layer Trust + Rust `don-guard` + `trust-jev` + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Public `main` (`v0.1.0-slice-01`) remains preserved separately for the Dec 1 Slice 01 drop.
+> **Branch Status (`main`):** Complete end-to-end build covering **Slices 01–06** (Durable Spine, 4-Layer Trust + Rust `don-guard` + `trust-jev` + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Git tag `v0.1.0-slice-01` preserves the Dec 1 Slice 01 baseline.
 
 ---
 
@@ -128,12 +128,12 @@ bun run don skills harness --dir /path/to/your-repo
 
 | Slice | Scope | Status |
 | :--- | :--- | :--- |
-| **Slice 01** | Durable WAL Spine, 4-Layer Trust, 1 Lead + 4 Specialists, Worktrees, `oxc` Gate, `don` CLI | **Complete (`v0.1.0-slice-01`)** |
-| **Slice 02** | 3-round debate rooms, Top-Down Verifier loop, subagent privilege stripping & time-travel fork | **Complete (`dev/full-factory`)** |
-| **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`dev/full-factory`)** |
-| **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`dev/full-factory`)** |
-| **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`dev/full-factory`)** |
-| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`dev/full-factory`)** |
+| **Slice 01** | Durable WAL Spine, 4-Layer Trust, 1 Lead + 4 Specialists, Worktrees, `oxc` Gate, `don` CLI | **Complete (`v0.1.0-slice-01` · `main`)** |
+| **Slice 02** | 3-round debate rooms, Top-Down Verifier loop, subagent privilege stripping & time-travel fork | **Complete (`main`)** |
+| **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`main`)** |
+| **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`main`)** |
+| **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`main`)** |
+| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`main`)** |
 
 ---
 
