@@ -1,6 +1,6 @@
 import { getSpineStatus } from '@don-bot/spine';
 
-export const TEAM_PACKAGE_VERSION = '0.1.0-alpha.0';
+export const TEAM_PACKAGE_VERSION = '0.6.0';
 
 export function getTeamStatus(): { team: string; spine: string; trust: string } {
   return {

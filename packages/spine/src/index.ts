@@ -3,7 +3,7 @@ import * as piDurable from '@earendil-works/pi-durable';
 import * as piDurableSqliteNode from '@earendil-works/pi-durable/storage/sqlite/node';
 import { TRUST_PACKAGE_VERSION } from '@don-bot/trust';
 
-export const SPINE_PACKAGE_VERSION = '0.1.0-alpha.0';
+export const SPINE_PACKAGE_VERSION = '0.6.0';
 
 export function getSpineStatus(): {
   spine: string;

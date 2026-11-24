@@ -1,4 +1,4 @@
-export const META_PACKAGE_VERSION = '0.1.0-alpha.0';
+export const META_PACKAGE_VERSION = '0.6.0';
 
 export function getMetaStatus(): { readonly meta: string } {
   return { meta: META_PACKAGE_VERSION };
