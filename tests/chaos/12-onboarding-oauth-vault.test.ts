@@ -245,10 +245,27 @@ describe('Chaos Test 12: Streamlined OAuth-first onboarding, encrypted VaultCred
     expect((await fetch(`${server.url}/api/onboarding/status`)).status).toBe(401);
     const authHeaders = { Authorization: `Bearer ${accessKey}` };
 
+    const cockpitHtmlRes = await fetch(`${server.url}/`);
+    expect(cockpitHtmlRes.status).toBe(200);
+    const cockpitHtml = await cockpitHtmlRes.text();
+    expect(cockpitHtml).toContain('Dedicated Agent Identity');
+    expect(cockpitHtml).toContain('Dedicated Agent Email');
+    expect(cockpitHtml).toContain('Dedicated Phone / SMS');
+    expect(cockpitHtml).toContain('Coming Soon');
+
     const initialStatus = await fetch(`${server.url}/api/onboarding/status`, {
       headers: authHeaders,
     });
     expect(initialStatus.status).toBe(200);
+    const initialStatusJson = (await initialStatus.json()) as {
+      identitySlots: Array<{ id: string; status: string }>;
+    };
+    expect(initialStatusJson.identitySlots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'dedicated-email', status: 'coming_soon' }),
+        expect.objectContaining({ id: 'dedicated-phone', status: 'coming_soon' }),
+      ]),
+    );
 
     // Start OAuth flow -> awaiting_input -> submit code -> completed -> brain + jev ready
     const startRes = await fetch(`${server.url}/api/onboarding/oauth/start`, {
@@ -374,6 +391,12 @@ describe('Chaos Test 12: Streamlined OAuth-first onboarding, encrypted VaultCred
     expect(statusRes.stdout).not.toContain(secret);
     const accessKey = readFileSync(join(dir, '.don', 'access-key'), 'utf8').trim();
     expect(statusRes.stdout).not.toContain(accessKey);
+
+    const onboardTextRes = await captureCli(['onboard', '--dir', dir, '--non-interactive']);
+    expect(onboardTextRes.code).toBe(0);
+    expect(onboardTextRes.stdout).toContain('[COMING SOON]');
+    expect(onboardTextRes.stdout).toContain('dedicated-email');
+    expect(onboardTextRes.stdout).toContain('dedicated-phone');
 
     const logoutRes = await captureCli([
       'auth',

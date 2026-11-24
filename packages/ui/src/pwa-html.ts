@@ -428,10 +428,20 @@ export function renderCockpitHtml(): string {
       gap: 10px;
     }
 
-    #oauth-provider-list {
+    #oauth-provider-list,
+    #identity-slots-list {
       display: flex;
       flex-direction: column;
       gap: 7px;
+    }
+
+    .identity-divider {
+      border-top: 1px solid var(--metal);
+      padding-top: 10px;
+      margin-top: 2px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
 
     .provider-row {
@@ -447,6 +457,22 @@ export function renderCockpitHtml(): string {
 
     .provider-row.active { border-color: rgba(63, 193, 255, 0.55); }
     .provider-row.recommended { border-left: 2px solid var(--ice); }
+    .provider-row.coming-soon {
+      opacity: 0.78;
+      border-style: dashed;
+      border-color: var(--metal);
+    }
+
+    .pill.soon {
+      border-color: var(--metal-strong);
+      color: var(--muted);
+      font-size: 10px;
+      padding: 3px 8px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
 
     .oauth-box {
       padding: 11px;
@@ -578,7 +604,7 @@ export function renderCockpitHtml(): string {
 
         <div class="step-card">
           <div class="card-head">
-            <span class="card-kind">3. Telegram &amp; Zero-Port Access</span>
+            <span class="card-kind">3. Channels, Identity &amp; Access</span>
             <span class="mono-meta" id="tg-badge">Optional</span>
           </div>
           <p class="mono-meta">Encrypt Telegram Desktop MTProto credentials inside Blind Vault (optional):</p>
@@ -588,6 +614,29 @@ export function renderCockpitHtml(): string {
             <button class="btn" id="save-tg-btn" type="button">Save to Blind Vault</button>
           </div>
           <div class="mono-meta" id="tunnel-hint">Remote access: tailscale serve / cloudflared</div>
+          <div class="identity-divider">
+            <div class="card-head">
+              <span class="card-kind">Dedicated Agent Identity</span>
+              <span class="mono-meta">Bring your own</span>
+            </div>
+            <div class="mono-meta">None configured by default — optional per-instance adapters sealed in Blind Vault:</div>
+            <div id="identity-slots-list">
+              <div class="provider-row coming-soon" data-identity-slot="dedicated-email">
+                <div>
+                  <div class="card-body">Dedicated Agent Email</div>
+                  <div class="mono-meta">Bring your own IMAP/SMTP or webhook domain inbox (Blind Vault + Two-Zone Firewall)</div>
+                </div>
+                <span class="pill soon" aria-disabled="true">Coming Soon</span>
+              </div>
+              <div class="provider-row coming-soon" data-identity-slot="dedicated-phone">
+                <div>
+                  <div class="card-body">Dedicated Phone / SMS</div>
+                  <div class="mono-meta">Bring your own SMS/voice webhook number with owner-approved outbound guard</div>
+                </div>
+                <span class="pill soon" aria-disabled="true">Coming Soon</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -661,6 +710,7 @@ export function renderCockpitHtml(): string {
       const elJevExplain = document.getElementById('jev-explain');
       const elTgBadge = document.getElementById('tg-badge');
       const elTunnelHint = document.getElementById('tunnel-hint');
+      const elIdentitySlots = document.getElementById('identity-slots-list');
       const elMain = document.getElementById('cockpit-main');
       let activeOauthSessionId = null;
       let oauthPollTimer = null;
@@ -977,6 +1027,23 @@ export function renderCockpitHtml(): string {
           }
           elOauthList.appendChild(row);
         });
+
+        if (elIdentitySlots && Array.isArray(status.identitySlots) && status.identitySlots.length > 0) {
+          clearChildren(elIdentitySlots);
+          status.identitySlots.forEach((slot) => {
+            const row = document.createElement('div');
+            row.className = 'provider-row coming-soon';
+            row.setAttribute('data-identity-slot', String(slot.id));
+            const info = document.createElement('div');
+            info.appendChild(createTextEl('div', 'card-body', String(slot.name)));
+            info.appendChild(createTextEl('div', 'mono-meta', String(slot.summary)));
+            const badge = createTextEl('span', 'pill soon', 'Coming Soon');
+            badge.setAttribute('aria-disabled', 'true');
+            row.appendChild(info);
+            row.appendChild(badge);
+            elIdentitySlots.appendChild(row);
+          });
+        }
 
         if (!status.brainReady && !sessionStorage.getItem('don_onboarding_dismissed')) {
           elOnboardingDrawer.hidden = false;

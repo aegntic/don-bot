@@ -123,6 +123,31 @@ export const ONBOARDING_PROVIDERS: readonly OnboardingProviderMeta[] = [
   },
 ];
 
+export interface OnboardingIdentitySlot {
+  readonly id: 'dedicated-email' | 'dedicated-phone';
+  readonly name: string;
+  readonly status: 'coming_soon';
+  readonly summary: string;
+  readonly protocols: readonly string[];
+}
+
+export const ONBOARDING_IDENTITY_SLOTS: readonly OnboardingIdentitySlot[] = [
+  {
+    id: 'dedicated-email',
+    name: 'Dedicated Agent Email',
+    status: 'coming_soon',
+    summary: 'Bring your own IMAP/SMTP or webhook domain inbox (Blind Vault + Two-Zone Firewall)',
+    protocols: ['IMAP/SMTP', 'HTTP Webhook'],
+  },
+  {
+    id: 'dedicated-phone',
+    name: 'Dedicated Phone / SMS',
+    status: 'coming_soon',
+    summary: 'Bring your own SMS/voice webhook number with owner-approved outbound guard',
+    protocols: ['SMS Webhook', 'Voice/STT'],
+  },
+];
+
 let bunOAuthRegistered = false;
 
 export function ensureBunOAuthRegistered(): void {
@@ -379,6 +404,7 @@ export interface OnboardingStatusReport {
   readonly jevSource: string | null;
   readonly telegramReady: boolean;
   readonly providers: readonly OnboardingProviderStatus[];
+  readonly identitySlots: readonly OnboardingIdentitySlot[];
   readonly vaultItemNames: readonly string[];
 }
 
@@ -510,6 +536,7 @@ export async function getOnboardingStatus(options: {
       jevSource,
       telegramReady,
       providers,
+      identitySlots: ONBOARDING_IDENTITY_SLOTS,
       vaultItemNames,
     };
   } finally {

@@ -168,6 +168,11 @@ export function formatOnboardingSummaryLines(status: OnboardingStatusReport): st
           : '[optional]';
       return `    - ${p.id.padEnd(15)} ${tag.padEnd(28)} ${p.summary}`;
     }),
+    '',
+    '  Optional Dedicated Identities (none hardcoded — bring your own):',
+    ...status.identitySlots.map(
+      (slot) => `    - ${slot.id.padEnd(16)} [COMING SOON] ${slot.summary}`,
+    ),
   ];
   return lines;
 }
@@ -387,6 +392,11 @@ export async function runInteractiveOnboarding(options: {
       }
     }
   }
+
+  writeOut(
+    options.io,
+    '  Optional dedicated agent email & phone/SMS adapters (bring your own): [Coming Soon]',
+  );
 
   const finalStatus = await getOnboardingStatus({ dir });
   writeOut(options.io, '\n✓ Workspace setup complete!');
