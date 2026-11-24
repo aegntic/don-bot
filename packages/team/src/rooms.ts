@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DonConfig, DonDatabase } from '@don-bot/spine';
+import type { JevDecisionPort } from '@don-bot/trust';
 import type { AgentRoleId } from './roster.ts';
 
 export const SOCIAL_CONTRACT = [
@@ -88,6 +89,135 @@ export function classifyTaskComplexity(
     recommendedRoles: [primarySolo],
     reason: 'Single-lane task bypasses structured debate room to avoid unnecessary chatter.',
   };
+}
+
+export interface JevTaskComplexityResult extends TaskComplexityResult {
+  readonly routedBy: 'jev' | 'heuristic';
+  readonly jevConfidence?: number;
+}
+
+/**
+ * Route goal complexity and specialist lanes through System-One Jev (falling back
+ * cleanly to deterministic keyword routing when offline or uncertain).
+ */
+export async function classifyTaskComplexityWithJev(
+  goal: string,
+  debateMode: DonConfig['team']['debateMode'] | boolean = 'complexity-gated',
+  jevClient?: JevDecisionPort | null,
+): Promise<JevTaskComplexityResult> {
+  const normalizedMode = debateMode === true ? 'always' : debateMode === false ? 'off' : debateMode;
+  if (!jevClient || normalizedMode === 'always' || normalizedMode === 'off') {
+    return {
+      ...classifyTaskComplexity(goal, debateMode),
+      routedBy: 'heuristic',
+    };
+  }
+
+  try {
+    const check = await jevClient.check({
+      instructions:
+        'Classify software engineering goal complexity (solo single-lane vs multi-lane team vs cross-lane debate) and which Don-Bot specialist lanes are needed.',
+      input: { goal: goal.trim() },
+      questions: [
+        {
+          name: 'route',
+          kind: 'choice',
+          instructions: 'Choose execution topology for the goal.',
+          minProbability: 0.65,
+          uncertainValue: 'uncertain',
+          choices: [
+            { value: 'solo', description: 'Isolated single-file or single-lane fix.' },
+            { value: 'team', description: 'Clear multi-lane task across API/pipeline/UI/tests.' },
+            {
+              value: 'debate',
+              description:
+                'Architectural tradeoff, security design, or multi-lane contract requiring consensus.',
+            },
+          ],
+        },
+        {
+          name: 'needs_api_keeper',
+          kind: 'noul',
+          instructions: 'Does this goal touch backend endpoints, auth, schemas, or database logic?',
+        },
+        {
+          name: 'needs_pipeline_forge',
+          kind: 'noul',
+          instructions:
+            'Does this goal touch CLI, build pipelines, git worktrees, workers, or infra?',
+        },
+        {
+          name: 'needs_client_qa',
+          kind: 'noul',
+          instructions:
+            'Does this goal touch UI components, frontend UX, tests, or QA verification?',
+        },
+        {
+          name: 'needs_memory_curator',
+          kind: 'noul',
+          instructions: 'Does this goal touch memory compression, recall, or decision history?',
+        },
+      ],
+    });
+
+    const routeAns = check.answers.route;
+    if (
+      check.refused ||
+      !routeAns ||
+      routeAns.refused ||
+      routeAns.choice === undefined ||
+      routeAns.choice === 'uncertain'
+    ) {
+      return {
+        ...classifyTaskComplexity(goal, debateMode),
+        routedBy: 'heuristic',
+      };
+    }
+
+    const route = String(routeAns.choice) as TaskComplexity;
+    const probTrue = (name: string): number => {
+      const ans = check.answers[name];
+      if (!ans || ans.refused) return 0;
+      return ans.rawChoice === true ? ans.probability : 1 - ans.probability;
+    };
+
+    const specialists: AgentRoleId[] = [];
+    if (probTrue('needs_api_keeper') >= 0.5) specialists.push('api-keeper');
+    if (probTrue('needs_pipeline_forge') >= 0.5) specialists.push('pipeline-forge');
+    if (probTrue('needs_client_qa') >= 0.5) specialists.push('client-qa');
+    if (probTrue('needs_memory_curator') >= 0.5) specialists.push('memory-curator');
+
+    if (specialists.length === 0) {
+      const fallback = classifyTaskComplexity(goal, debateMode);
+      const firstNonLead = fallback.recommendedRoles.find((r) => r !== 'lead') ?? 'api-keeper';
+      specialists.push(firstNonLead);
+    }
+
+    const shouldOpenRoom = route !== 'solo';
+    const roles: AgentRoleId[] = shouldOpenRoom
+      ? Array.from(new Set<AgentRoleId>(['lead', ...specialists]))
+      : [specialists[0] ?? 'api-keeper'];
+
+    if (shouldOpenRoom && roles.length < 3) {
+      for (const candidate of ['api-keeper', 'client-qa'] as const) {
+        if (!roles.includes(candidate)) roles.push(candidate);
+      }
+    }
+
+    return {
+      complexity: route,
+      shouldOpenRoom,
+      recommendedRoles: roles,
+      reason: `Jev System-One routed goal as "${route}" (confidence=${routeAns.probability.toFixed(2)}).`,
+      routedBy: 'jev',
+      jevConfidence: routeAns.probability,
+    };
+  } catch {
+    return {
+      ...classifyTaskComplexity(goal, debateMode),
+      routedBy: 'heuristic',
+    };
+  }
 }
 
 export interface CreateRoomInput {

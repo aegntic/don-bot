@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli } from '../../packages/cli/src/index.ts';
@@ -67,6 +67,7 @@ describe('don CLI commands', () => {
     const statusRes = await captureCli(['status', '--dir', workDir]);
     expect(statusRes.code).toBe(0);
     expect(statusRes.stdout).toContain('wal');
+    expect(statusRes.stdout).toContain('skillEvaluator:');
     expect(statusRes.stdout).not.toContain(rawSecret);
 
     const guardStatus = await captureCli(['guard', 'status', '--dir', workDir]);
@@ -142,5 +143,91 @@ describe('don CLI commands', () => {
     const badRes = await captureCli(['nonexistent-subcommand']);
     expect(badRes.code).toBe(2);
     expect(badRes.stderr).toContain('Unknown command');
+  });
+
+  test('skills subcommands handle status, eval, harness, history, mode toggles, and install', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'don-cli-skills-'));
+    tempDirs.push(workDir);
+
+    const initRes = await captureCli(['init', '--dir', workDir]);
+    expect(initRes.code).toBe(0);
+
+    const cleanSkillDir = join(workDir, 'skills', 'clean-audit');
+    mkdirSync(cleanSkillDir, { recursive: true });
+    writeFileSync(
+      join(cleanSkillDir, 'SKILL.md'),
+      [
+        '---',
+        'name: clean-audit',
+        'description: Audits repository manifests and validates schema errors cleanly.',
+        '---',
+        '',
+        '# Clean Audit',
+        '',
+        '## Prerequisites',
+        'Repository workspace access.',
+        '',
+        '## Limitations',
+        'Static manifest inspection only.',
+        '',
+        '## Troubleshooting',
+        'If invalid input error occurs, verify YAML formatting.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const statusRes = await captureCli(['skills', 'status', '--dir', workDir]);
+    expect(statusRes.code).toBe(0);
+    expect(statusRes.stdout).toContain('SkillEvaluator status');
+    expect(statusRes.stdout).toContain('discovered: 1 skill(s)');
+
+    const evalPass = await captureCli(['skills', 'eval', '--dir', workDir, '--faux']);
+    expect(evalPass.code).toBe(0);
+    expect(evalPass.stdout).toContain('Skill gate passed');
+
+    const harnessRes = await captureCli(['skills', 'harness', '--dir', workDir, '--faux']);
+    expect(harnessRes.code).toBe(0);
+    expect(harnessRes.stdout).toContain('claude-code: loads');
+
+    const historyRes = await captureCli(['skills', 'history', '--dir', workDir]);
+    expect(historyRes.code).toBe(0);
+    expect(historyRes.stdout).toContain('clean-audit');
+
+    const badSkillDir = join(workDir, 'skills', 'broken-skill');
+    mkdirSync(badSkillDir, { recursive: true });
+    writeFileSync(
+      join(badSkillDir, 'SKILL.md'),
+      '---\nname: claude-broken\ndescription: Short\n---\n\n# Bad\n',
+      'utf8',
+    );
+
+    const evalBlockFail = await captureCli(['skills', 'eval', '--dir', workDir, '--faux']);
+    expect(evalBlockFail.code).toBe(1);
+    expect(evalBlockFail.stdout).toContain('Skill gate blocked');
+
+    const logOnlyRes = await captureCli(['skills', 'log-only', '--dir', workDir]);
+    expect(logOnlyRes.code).toBe(0);
+    expect(loadDonConfig(workDir).skillEvaluator.mode).toBe('log-only');
+
+    const evalLogOnly = await captureCli(['skills', 'eval', '--dir', workDir, '--faux']);
+    expect(evalLogOnly.code).toBe(0);
+    expect(evalLogOnly.stdout).toContain('recorded warnings');
+
+    const blockRes = await captureCli(['skills', 'block', '--dir', workDir]);
+    expect(blockRes.code).toBe(0);
+    expect(loadDonConfig(workDir).skillEvaluator.mode).toBe('block');
+
+    const installRes = await captureCli(['skills', 'install']);
+    expect(installRes.code).toBe(0);
+    expect(installRes.stdout).toContain('NVIDIA/SkillEvaluator');
+
+    const badTierRes = await captureCli(['skills', 'eval', '--dir', workDir, '--tiers', '9']);
+    expect(badTierRes.code).toBe(2);
+    expect(badTierRes.stderr).toContain('Invalid --tiers');
+
+    const badSubcmd = await captureCli(['skills', 'unknown-op', '--dir', workDir]);
+    expect(badSubcmd.code).toBe(2);
+    expect(badSubcmd.stderr).toContain('Unknown skills subcommand');
   });
 });

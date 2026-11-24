@@ -10,6 +10,13 @@ export type DonEventKind =
   | 'context_checkpoint'
   | 'decision'
   | 'budget'
+  | 'skill_eval'
+  | 'jev'
+  | 'a2ui'
+  | 'verifier'
+  | 'channel'
+  | 'rollback'
+  | 'meta'
   | 'system';
 
 export interface DonEventRecord {

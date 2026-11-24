@@ -63,7 +63,7 @@ export const DEFAULT_ROSTER: Readonly<Record<AgentRoleId, AgentProfile>> = {
     modelTier: 'gate',
     ownedPaths: ['packages/ui', 'tests', 'src/client'],
     laneContract:
-      'Own client surfaces, unit and chaos verification suites, lint/format checks, and regression gates without widening feature scope.',
+      'Own client surfaces, unit and chaos verification suites, oxc code gates (kind="code"), NVIDIA SkillEvaluator gates (kind="skill"), and regression gates without widening feature scope.',
   },
   'memory-curator': {
     id: 'memory-curator',
@@ -106,9 +106,9 @@ export function buildStaticPromptPrefix(
     options.repoMap && options.repoMap.length > 0
       ? options.repoMap
       : [
-          'packages/trust - untrusted delimiters, SSRF guards, secret scrubbing, sandbox, safeagents',
-          'packages/spine - SQLite WAL store, config, event log, turn lock, compaction, FTS5 memory, budget breaker',
-          'packages/team - 1 Lead + 4 Specialist roster, typed rooms, cooldown, worktrees, merge lease, oxc gate',
+          'packages/trust - untrusted delimiters, SSRF guards, secret scrubbing, sandbox, safeagents, SkillEvaluator',
+          'packages/spine - SQLite WAL store, config, event log, turn lock, compaction, FTS5 memory, budget breaker, skill eval ledger',
+          'packages/team - 1 Lead + 4 Specialist roster, typed rooms, cooldown, worktrees, merge lease, oxc code gate, SkillEvaluator gate',
           'packages/cli - don CLI entrypoint and operator commands',
         ];
 
@@ -118,7 +118,7 @@ export function buildStaticPromptPrefix(
       `Role: ${profile.id} (${profile.title})`,
       `Tier: ${profile.modelTier}`,
       `Coding Allowed: ${profile.canWriteCode ? 'yes' : 'no'}`,
-      'Invariants: preserve SQLite WAL crash-replay guarantees, respect fail-closed SSRF/safeagents/sandbox trust boundaries, never auto-push git branches without approved decision card, and run oxc lint/format + tests before claiming done.',
+      'Invariants: preserve SQLite WAL crash-replay guarantees, respect fail-closed SSRF/safeagents/sandbox trust boundaries, never auto-push git branches without approved decision card, and run oxc code gate (kind="code") + SkillEvaluator gate (kind="skill") + tests before claiming done.',
     ].join('\n'),
     ['## Repo Map', ...repoMapLines.map((line) => `- ${line}`)].join('\n'),
     [

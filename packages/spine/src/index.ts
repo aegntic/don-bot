@@ -24,8 +24,12 @@ export function getSpineStatus(): {
 export * from './budget.ts';
 export * from './compact.ts';
 export * from './config.ts';
+export * from './credentials.ts';
 export * from './db.ts';
 export * from './events.ts';
 export * from './memory.ts';
+export * from './replay.ts';
+export * from './rollback.ts';
 export * from './runtime.ts';
+export * from './skill-evals.ts';
 export * from './turn-lock.ts';

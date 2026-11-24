@@ -6,5 +6,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@don-bot/spine": "workspace:*",
+    "@don-bot/team": "workspace:*",
+    "@don-bot/trust": "workspace:*",
+    "@mtcute/bun": "0.32.8"
   }
 }

@@ -1,3 +1,4 @@
+import type { JevDecisionPort } from '@don-bot/trust';
 import type { DonDatabase } from './db.ts';
 
 export class MemoryProvenanceError extends Error {
@@ -131,4 +132,111 @@ export function recallMemory(
     status: row.status,
     createdAt: Number(row.created_at),
   }));
+}
+
+export interface JevMemoryPromotionResult {
+  readonly promoted: boolean;
+  readonly entry?: MemoryEntry;
+  readonly confidence?: number;
+  readonly reason: string;
+}
+
+/**
+ * Verify verbatim owner-turn provenance and gate durable FTS5 memory promotion
+ * through System-One Jev so transient conversational chatter stays out of long-term recall.
+ */
+export async function promoteMemoryWithJev(
+  db: DonDatabase,
+  input: {
+    readonly lane: string;
+    readonly kind: string;
+    readonly text: string;
+    readonly verbatimOwnerQuote: string;
+    readonly sourceTurnId: string;
+    readonly jevClient?: JevDecisionPort | null;
+    readonly minConfidence?: number;
+    readonly now?: number;
+  },
+): Promise<JevMemoryPromotionResult> {
+  const quote = input.verbatimOwnerQuote.trim();
+  if (!quote) {
+    throw new MemoryProvenanceError('Cannot save memory without a non-empty verbatimOwnerQuote');
+  }
+
+  const turn = db.raw
+    .prepare('SELECT owner_text, status FROM don_turns WHERE turn_id = ?')
+    .get(input.sourceTurnId) as { owner_text: string; status: string } | undefined;
+
+  if (!turn) {
+    throw new MemoryProvenanceError(`Unknown source turn "${input.sourceTurnId}"`);
+  }
+  if (turn.status === 'withdrawn' || turn.status === 'aborted' || turn.status === 'failed') {
+    throw new MemoryProvenanceError(
+      `Source turn "${input.sourceTurnId}" has status "${turn.status}" and cannot authorize memory`,
+    );
+  }
+  if (!turn.owner_text.includes(quote)) {
+    throw new MemoryProvenanceError(
+      `verbatimOwnerQuote does not appear verbatim in owner_text of turn "${input.sourceTurnId}"`,
+    );
+  }
+
+  const minConfidence = input.minConfidence ?? 0.7;
+  let confidence: number | undefined;
+
+  if (input.jevClient) {
+    try {
+      const check = await input.jevClient.check({
+        instructions:
+          'Decide if the owner statement establishes a durable rule, preference, or constraint worth persisting across future coding sessions.',
+        input: {
+          lane: input.lane,
+          kind: input.kind,
+          proposedMemory: input.text,
+          verbatimOwnerQuote: quote,
+        },
+        questions: [
+          {
+            name: 'is_durable_memory',
+            kind: 'noul',
+            instructions:
+              'True only if verbatimOwnerQuote expresses an enduring rule, constraint, or preference rather than ephemeral small talk.',
+          },
+        ],
+      });
+
+      const ans = check.answers.is_durable_memory;
+      if (check.refused || !ans || ans.refused) {
+        return { promoted: false, confidence: 0, reason: 'jev_refused' };
+      }
+
+      const pTrue = ans.rawChoice === true ? ans.probability : 1 - ans.probability;
+      confidence = pTrue;
+      if (pTrue < minConfidence) {
+        return {
+          promoted: false,
+          confidence: pTrue,
+          reason: `jev_ephemeral_rejected (p=${pTrue.toFixed(2)} < ${minConfidence.toFixed(2)})`,
+        };
+      }
+    } catch {
+      return { promoted: false, confidence: 0, reason: 'jev_error_fail_closed' };
+    }
+  }
+
+  const entry = saveMemory(db, {
+    lane: input.lane,
+    kind: input.kind,
+    text: input.text,
+    verbatimOwnerQuote: quote,
+    sourceTurnId: input.sourceTurnId,
+    now: input.now,
+  });
+
+  return {
+    promoted: true,
+    entry,
+    ...(confidence !== undefined ? { confidence } : {}),
+    reason: input.jevClient ? 'jev_promoted' : 'heuristic_promoted',
+  };
 }

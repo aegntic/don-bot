@@ -13,3 +13,6 @@ Durable checkpointing and task orchestration build on:
 
 Multi-agent room and factory workflow patterns inspired by:
   - Tiny Software Factories (github.com/disler)
+
+Skill quality, security, and harness-compatibility evaluation integrates:
+  - NVIDIA/SkillEvaluator (Copyright NVIDIA Corporation, Apache-2.0)

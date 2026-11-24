@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'node:fs
 import { join, normalize, resolve } from 'node:path';
 import { listDecisionCards, type DonDatabase } from '@don-bot/spine';
 import type { AgentRoleId } from './roster.ts';
+import type { SkillGateEnvelope } from './skill-gate.ts';
 import { withWriterLease } from './writer-lease.ts';
 
 export interface SecretFinding {
@@ -11,11 +12,11 @@ export interface SecretFinding {
 }
 
 export class GitPushBlockedError extends Error {
-  readonly reason: 'missing_approval' | 'secret_detected';
+  readonly reason: 'missing_approval' | 'secret_detected' | 'skill_eval_failed';
   readonly findings?: readonly SecretFinding[];
 
   constructor(
-    reason: 'missing_approval' | 'secret_detected',
+    reason: 'missing_approval' | 'secret_detected' | 'skill_eval_failed',
     message: string,
     findings?: readonly SecretFinding[],
   ) {
@@ -257,12 +258,19 @@ function isBranchMerged(repoDir: string, branch: string, baseBranch: string): bo
   return res.status === 0;
 }
 
+function isWorktreeDirty(worktreePath: string): boolean {
+  if (!existsSync(worktreePath)) return false;
+  const res = runGit(['status', '--porcelain'], worktreePath);
+  return res.status === 0 && res.stdout.trim().length > 0;
+}
+
 export function gcWorktrees(
   repoDir: string,
   options: {
     readonly worktreeRoot?: string;
     readonly baseBranch?: string;
     readonly removeMerged?: boolean;
+    readonly forceDirty?: boolean;
   } = {},
 ): {
   pruned: number;
@@ -273,6 +281,7 @@ export function gcWorktrees(
   const worktreeRoot = resolve(options.worktreeRoot ?? join(resolvedRepo, '.don', 'worktrees'));
   const baseBranch = options.baseBranch ?? getCurrentBranch(resolvedRepo);
   const removeMerged = options.removeMerged ?? true;
+  const forceDirty = options.forceDirty ?? false;
 
   runGit(['worktree', 'prune'], resolvedRepo);
   const listed = listSpecialistWorktrees(resolvedRepo, { worktreeRoot });
@@ -285,6 +294,7 @@ export function gcWorktrees(
   for (const entry of listed) {
     activeWorktreePaths.add(resolve(entry.path));
     if (!entry.managed) continue;
+    if (!forceDirty && isWorktreeDirty(entry.path)) continue;
 
     const shouldRemove =
       entry.prunable ||
@@ -444,6 +454,7 @@ export interface AssertGitPushAllowedOptions {
   readonly taskId: string;
   readonly diffText?: string;
   readonly repoDir?: string;
+  readonly skillGate?: Pick<SkillGateEnvelope, 'passed' | 'blocked' | 'failedSkills' | 'summary'>;
 }
 
 export function assertGitPushAllowed(db: DonDatabase, options: AssertGitPushAllowedOptions): void {
@@ -460,6 +471,13 @@ export function assertGitPushAllowed(db: DonDatabase, options: AssertGitPushAllo
     throw new GitPushBlockedError(
       'missing_approval',
       `git push/PR for task "${options.taskId}" is blocked until an owner-approved Decision Deck card (kind="git_push") is resolved.`,
+    );
+  }
+
+  if (options.skillGate?.blocked) {
+    throw new GitPushBlockedError(
+      'skill_eval_failed',
+      `git push/PR for task "${options.taskId}" is blocked by core SkillEvaluator gate (${options.skillGate.summary}).`,
     );
   }
 

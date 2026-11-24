@@ -46,3 +46,35 @@ team:
   maxConsecutiveFailures: 2
   maxVerifierLoops: 3
   worktreeDir: .don/worktrees
+
+skillEvaluator:
+  enabled: true
+  # Block merges/pushes when a skill fails quality, security, PII, or Unicode smuggling checks.
+  mode: block
+  tiers:
+    - 1
+  minScore: 70
+  profile: default
+  noLlm: true
+  requireBinary: false
+  blockOnDedup: true
+  blockOnAgentEval: false
+  envMode: local
+  skillPaths:
+    - skills
+    - .agents/skills
+    - .claude/skills
+
+jev:
+  # System-One calibrated decision gates (TYPESAFE_API_KEY -> jev-1.14.0, OPENROUTER_API_KEY -> typesafe/jev-1.14)
+  enabled: true
+  provider: auto
+  model: auto
+  timeoutMs: 1500
+  minConfidence: 0.85
+  enforceShadowMode: true
+  gateTools: true
+  routeComplexity: true
+  verifyStop: true
+  filterMemory: true
+  gateOutbound: true

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   BACKGROUND_CONTEXT,
@@ -11,18 +11,28 @@ import {
   fauxToolCall,
   loadDonConfig,
   obj,
+  openDonDb,
   openDonSpine,
+  opt,
   recordTurn,
+  resolveConfiguredJevClient,
   type ResolvedTierModel,
   resolveTierModel,
   str,
   updateTurnStatus,
+  VaultCredentialStore,
 } from '@don-bot/spine';
-import { ensureAccessKey, type SafeAgentsMode } from '@don-bot/trust';
+import {
+  discoverSkillDirs,
+  ensureAccessKey,
+  type JevDecisionPort,
+  type SafeAgentsMode,
+} from '@don-bot/trust';
 import { type CodeGateEnvelope, runCodeGate } from './code-gate.ts';
 import { type AgentRoleId, buildStaticPromptPrefix, getAgentProfile } from './roster.ts';
 import {
   classifyTaskComplexity,
+  classifyTaskComplexityWithJev,
   closeRoom,
   createRoom,
   postRoomMessage,
@@ -30,6 +40,7 @@ import {
   shouldAgentRespond,
   type TaskComplexityResult,
 } from './rooms.ts';
+import { runSkillGate, type SkillGateEnvelope } from './skill-gate.ts';
 
 export interface RunTeamGoalOptions {
   readonly dir: string;
@@ -37,8 +48,10 @@ export interface RunTeamGoalOptions {
   readonly faux?: boolean;
   readonly role?: AgentRoleId;
   readonly config?: DonConfig;
+  readonly jevClient?: JevDecisionPort;
   readonly safeAgentsMode?: SafeAgentsMode;
   readonly verifyCodeGate?: boolean;
+  readonly verifySkillGate?: boolean;
   readonly maxRounds?: number;
 }
 
@@ -55,6 +68,7 @@ export interface RunTeamGoalResult {
   readonly summary: string;
   readonly budget: BudgetSnapshot;
   readonly codeGate?: CodeGateEnvelope;
+  readonly skillGate?: SkillGateEnvelope;
 }
 
 export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamGoalResult> {
@@ -65,7 +79,34 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
 
   const dbPath = join(donDir, 'factory.sqlite');
   const config = options.config ?? loadDonConfig(dir);
-  const complexity = classifyTaskComplexity(options.goal, config.team.debateMode);
+
+  let storedProviders: string[] = [];
+  let vaultKeys: { typesafe?: string; openrouter?: string; openai?: string } = {};
+  if (!options.faux && existsSync(dbPath)) {
+    const inspectDb = openDonDb(dbPath);
+    try {
+      const store = new VaultCredentialStore({ db: inspectDb.raw, donDir });
+      storedProviders = store.listDetailed().map((entry) => entry.providerId);
+      vaultKeys = await store.resolveJevApiKeys();
+    } finally {
+      inspectDb.close();
+    }
+  }
+
+  const useFauxModel =
+    Boolean(options.faux) ||
+    resolveTierModel(config, 'architect', { faux: options.faux, storedProviders }).provider ===
+      'faux';
+  const activeJev = resolveConfiguredJevClient(config, {
+    faux: useFauxModel,
+    overrideClient: options.jevClient,
+    vaultKeys,
+  });
+
+  const complexity =
+    activeJev && config.jev.enabled && config.jev.routeComplexity
+      ? await classifyTaskComplexityWithJev(options.goal, config.team.debateMode, activeJev)
+      : classifyTaskComplexity(options.goal, config.team.debateMode);
 
   const activeRole: AgentRoleId =
     options.role ??
@@ -73,6 +114,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   const activeProfile = getAgentProfile(activeRole);
   const model = resolveTierModel(config, activeProfile.modelTier, {
     faux: options.faux,
+    storedProviders,
   });
   const useFaux = Boolean(options.faux) || model.provider === 'faux';
 
@@ -80,6 +122,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   const turnId = `turn-${randomUUID()}`;
 
   const loggedSteps: string[] = [];
+  let spineRef: Awaited<ReturnType<typeof openDonSpine>> | null = null;
   const teamExt = defineExtension({
     name: 'don-team-coordination',
     tools: [
@@ -98,6 +141,42 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
           };
         },
       }),
+      defineTool({
+        name: 'evaluate_skill',
+        description:
+          'Run core NVIDIA SkillEvaluator quality, security, PII, unicode, and harness checks on a skill path',
+        parameters: obj({
+          path: opt(str({ description: 'Relative path to skill directory or collection' })),
+        }),
+        async execute(args) {
+          const gate = await runSkillGate({
+            cwd: dir,
+            targetPath: args.path,
+            config,
+            db: spineRef?.db,
+            taskId,
+            runId: turnId,
+            agentId: activeRole,
+            faux: useFaux,
+          });
+          return {
+            output: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  kind: gate.kind,
+                  passed: gate.passed,
+                  blocked: gate.blocked,
+                  skipped: gate.skipped,
+                  evaluatedCount: gate.evaluatedCount,
+                  failedSkills: gate.failedSkills,
+                  summary: gate.summary,
+                }),
+              },
+            ],
+          };
+        },
+      }),
     ],
   });
 
@@ -105,16 +184,19 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
     dbPath,
     config,
     faux: useFaux,
+    jevClient: activeJev ?? undefined,
     cwd: dir,
     safeAgentsMode: options.safeAgentsMode ?? config.safeagents.mode,
     extraExtensions: [teamExt],
   });
+  spineRef = spine;
 
   let roomId: string | undefined;
   let roomMessages: RoomMessageRecord[] = [];
   let settledStatus = 'done';
   let summary = '';
   let budgetSnapshot: BudgetSnapshot;
+  let skillGate: SkillGateEnvelope | undefined;
 
   try {
     recordTurn(spine.db, {
@@ -200,6 +282,10 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
       agentId: activeRole,
       tier: activeProfile.modelTier,
     });
+    spine.setActiveTurn(convId, {
+      turnId,
+      ownerQuote: options.goal,
+    });
 
     const submission = await conv.submit(
       {
@@ -221,7 +307,28 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
         ? `Goal ${taskId} completed (${complexity.complexity}; ${complexity.recommendedRoles.join(', ')})`
         : `Goal ${taskId} ended with status=${settled.status}`;
 
-    updateTurnStatus(spine.db, turnId, settled.status === 'done' ? 'done' : 'aborted');
+    const shouldRunSkillGate =
+      options.verifySkillGate === true ||
+      (options.verifySkillGate !== false &&
+        config.skillEvaluator.enabled &&
+        discoverSkillDirs(dir, config.skillEvaluator.skillPaths).length > 0);
+    if (shouldRunSkillGate) {
+      skillGate = await runSkillGate({
+        cwd: dir,
+        config,
+        db: spine.db,
+        taskId,
+        runId: turnId,
+        agentId: activeRole,
+        faux: useFaux,
+      });
+      if (skillGate.blocked) {
+        settledStatus = 'blocked';
+        summary = `${summary}; ${skillGate.summary}`;
+      }
+    }
+
+    updateTurnStatus(spine.db, turnId, settledStatus === 'done' ? 'done' : 'aborted');
     budgetSnapshot = spine.getBudgetForConversation(convId);
   } finally {
     await spine.close();
@@ -245,5 +352,6 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
     summary,
     budget: budgetSnapshot,
     codeGate,
+    skillGate,
   };
 }
