@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -8,6 +9,22 @@ import {
   loadExclusionsFile,
   TelegramClient,
 } from '@don-bot/channels';
+import {
+  archiveFactory,
+  cloneTemplate,
+  ensureDefaultTemplate,
+  factoryMailboxList,
+  factoryMailboxRead,
+  factoryMailboxSend,
+  hireFactoryOwner,
+  listChangelogs,
+  listFactories,
+  listTemplates,
+  requestFactorySpawn,
+  requestHireOwner,
+  runMetaWorkflow,
+  type MailboxMessageKind,
+} from '@don-bot/meta';
 import {
   BACKGROUND_CONTEXT,
   createRollbackCheckpoint,
@@ -20,6 +37,8 @@ import {
   loadDonConfig,
   openDonDb,
   openDonSpine,
+  recordTurn,
+  resolveDecisionCard,
   saveDonConfig,
   VaultCredentialStore,
   writeDefaultDonConfig,
@@ -102,6 +121,8 @@ function renderHelp(): string {
     '  channel status                   Inspect Telegram Me Mode (@mtcute/bun) & EXCLUSIONS.txt',
     '  tunnel <tailscale|cloudflared>   Print zero-port remote access command & tool detection',
     '  skills <status|eval|harness|history|block|log-only|install>  Run core NVIDIA SkillEvaluator checks',
+    '  template <list|clone>            List or clone versioned Blank Factory Templates',
+    '  factory <list|spawn|hire|upgrade|audit|changelog|archive|mailbox>  Manage Meta-Factory fleet, owners & mailbox',
     '  worktree gc                      Prune merged or stale specialist git worktrees',
     '  test:crash                       Run Chaos Test 1 (real SIGKILL + once() recovery)',
     '',
@@ -112,6 +133,13 @@ function renderHelp(): string {
     '  --provider <id>                  Provider ID for auth set/logout (openrouter|anthropic|openai|google|typesafe)',
     '  --key <secret>                   API key for auth set (never printed back; prompts masked if omitted in TTY)',
     '  --non-interactive                Run onboard without interactive terminal prompts',
+    '  --template <id>                  Template ID for factory spawn',
+    '  --mission <text>                 Operational mission for factory hire',
+    '  --from <slug>                    Source factory slug for mailbox send',
+    '  --to <slug>                      Target factory slug for mailbox list/send/read',
+    '  --subject <text>                 Subject line for mailbox send',
+    '  --body <text>                    Body payload for mailbox send',
+    '  --reason <text>                  Audit reason for template clone or factory spawn/upgrade/archive',
     '  --port <number>                  Server or tunnel port (default: 4321)',
     '  --host <addr>                    Server bind host (default: 127.0.0.1)',
     '  --name <secretName>              Blind Vault secret name',
@@ -202,6 +230,13 @@ export async function runCli(
       provider: { type: 'string' },
       key: { type: 'string' },
       'non-interactive': { type: 'boolean', default: false },
+      template: { type: 'string' },
+      mission: { type: 'string' },
+      from: { type: 'string' },
+      to: { type: 'string' },
+      subject: { type: 'string' },
+      body: { type: 'string' },
+      reason: { type: 'string' },
       port: { type: 'string' },
       host: { type: 'string' },
       name: { type: 'string' },
@@ -1253,6 +1288,436 @@ export async function runCli(
       out,
     );
     return 0;
+  }
+
+  if (command === 'template') {
+    const action = rest[0] ?? 'list';
+    const initInfo = ensureWorkspaceInitialized(dir);
+    const db = openDonDb(initInfo.dbPath);
+    try {
+      ensureDefaultTemplate(db);
+
+      if (action === 'list') {
+        const templates = listTemplates(db);
+        emitResult(
+          asJson,
+          { templates },
+          [
+            `Blank Factory Templates (${templates.length}):`,
+            ...templates.map(
+              (tpl) =>
+                `  - ${tpl.id}@v${tpl.version} (${tpl.name})${tpl.parentTemplateId ? ` <- ${tpl.parentTemplateId}` : ''} · skills=${tpl.manifest.skills.length} workflows=${tpl.manifest.workflows.length}`,
+            ),
+          ],
+          out,
+        );
+        return 0;
+      }
+
+      if (action === 'clone') {
+        const sourceId = rest[1]?.trim() ?? '';
+        const newId = rest[2]?.trim() ?? '';
+        if (!sourceId || !newId) {
+          writeLine(
+            errOut,
+            'Usage: don template clone <sourceId> <newId> [--name "<name>"] [--reason "<reason>"]',
+          );
+          return 2;
+        }
+        const name =
+          typeof parsed.values.name === 'string' && parsed.values.name.trim()
+            ? parsed.values.name.trim()
+            : newId;
+        const reason =
+          typeof parsed.values.reason === 'string' && parsed.values.reason.trim()
+            ? parsed.values.reason.trim()
+            : undefined;
+        try {
+          const cloned = cloneTemplate(db, { sourceId, newId, name, reason });
+          emitResult(
+            asJson,
+            { ok: true, template: cloned },
+            [`Cloned template ${sourceId} -> ${cloned.id}@v${cloned.version} (${cloned.name})`],
+            out,
+          );
+          return 0;
+        } catch (err) {
+          writeLine(errOut, err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+
+      writeLine(errOut, `Unknown template subcommand "${action}". Expected: list, clone`);
+      return 2;
+    } finally {
+      db.close();
+    }
+  }
+
+  if (command === 'factory') {
+    const action = rest[0] ?? 'list';
+    const initInfo = ensureWorkspaceInitialized(dir);
+    const db = openDonDb(initInfo.dbPath);
+    try {
+      ensureDefaultTemplate(db);
+
+      if (action === 'list') {
+        const factories = listFactories(db);
+        emitResult(
+          asJson,
+          { factories },
+          factories.length === 0
+            ? ['No spawned child factories yet (run "don factory spawn <slug>").']
+            : [
+                `Managed Factories (${factories.length}):`,
+                ...factories.map(
+                  (f) =>
+                    `  - ${f.slug} [${f.state}] template=${f.templateId}@v${f.templateVersion} owner=${f.ownerAgentId ?? 'unassigned'}${f.mission ? ` mission="${f.mission}"` : ''}`,
+                ),
+              ],
+          out,
+        );
+        return 0;
+      }
+
+      if (action === 'spawn') {
+        const slug = rest[1]?.trim() ?? '';
+        if (!slug) {
+          writeLine(
+            errOut,
+            'Usage: don factory spawn <slug> [--template <id>] [--name "<name>"] [--reason "<reason>"]',
+          );
+          return 2;
+        }
+        const templateId =
+          typeof parsed.values.template === 'string' && parsed.values.template.trim()
+            ? parsed.values.template.trim()
+            : undefined;
+        const name =
+          typeof parsed.values.name === 'string' && parsed.values.name.trim()
+            ? parsed.values.name.trim()
+            : slug;
+        const reason =
+          typeof parsed.values.reason === 'string' && parsed.values.reason.trim()
+            ? parsed.values.reason.trim()
+            : 'CLI operator factory spawn';
+
+        try {
+          const req = requestFactorySpawn(db, { slug, name, templateId, reason });
+          const turnId = `cli-meta-${randomUUID().slice(0, 12)}`;
+          recordTurn(db, {
+            turnId,
+            sessionId: `factory:${slug}`,
+            ownerText: `don factory spawn ${slug}`,
+            status: 'done',
+          });
+          resolveDecisionCard(db, req.decisionCard.id, 'Approve Spawn', turnId);
+
+          const outWorkflow = await runMetaWorkflow(db, {
+            workflow: 'factory.spawn',
+            slug,
+            name,
+            templateId,
+            metaRootDir: dir,
+            decisionCardId: req.decisionCard.id,
+            ownerQuoteTurnId: turnId,
+            changelogId: req.changelogId,
+          });
+          const factory =
+            outWorkflow.workflow === 'factory.spawn' && outWorkflow.replay.status !== 'interrupted'
+              ? outWorkflow.replay.value
+              : null;
+          if (!factory) {
+            writeLine(errOut, `Factory spawn workflow for "${slug}" was interrupted.`);
+            return 1;
+          }
+          emitResult(
+            asJson,
+            { ok: true, factory, turnId, decisionCardId: req.decisionCard.id },
+            [
+              `Spawned empty factory "${factory.slug}" (${factory.state})`,
+              `  template:  ${factory.templateId}@v${factory.templateVersion}`,
+              `  workspace: ${factory.workspaceDir}`,
+            ],
+            out,
+          );
+          return 0;
+        } catch (err) {
+          writeLine(errOut, err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+
+      if (action === 'hire') {
+        const slug = rest[1]?.trim() ?? '';
+        const mission =
+          typeof parsed.values.mission === 'string' ? parsed.values.mission.trim() : '';
+        if (!slug || !mission) {
+          writeLine(
+            errOut,
+            'Usage: don factory hire <slug> --mission "<mission>" [--name "<ownerTitle>"]',
+          );
+          return 2;
+        }
+        const title =
+          typeof parsed.values.name === 'string' && parsed.values.name.trim()
+            ? parsed.values.name.trim()
+            : undefined;
+        try {
+          const req = requestHireOwner(db, { factorySlug: slug, mission, title });
+          const turnId = `cli-meta-${randomUUID().slice(0, 12)}`;
+          recordTurn(db, {
+            turnId,
+            sessionId: `factory:${slug}`,
+            ownerText: `don factory hire ${slug} --mission "${mission}"`,
+            status: 'done',
+          });
+          resolveDecisionCard(db, req.decisionCard.id, 'Hire Owner & Activate', turnId);
+          const hired = hireFactoryOwner(db, {
+            factorySlug: slug,
+            mission,
+            title,
+            decisionCardId: req.decisionCard.id,
+            ownerQuoteTurnId: turnId,
+            changelogId: req.changelogId,
+          });
+          emitResult(
+            asJson,
+            { ok: true, ...hired, turnId },
+            [
+              `Hired ${hired.owner.id} (${hired.owner.title}) for "${hired.factory.slug}"`,
+              `  state:   ${hired.factory.state}`,
+              `  mission: ${hired.owner.mission}`,
+            ],
+            out,
+          );
+          return 0;
+        } catch (err) {
+          writeLine(errOut, err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+
+      if (action === 'upgrade') {
+        const slug = rest[1]?.trim() ?? '';
+        if (!slug) {
+          writeLine(errOut, 'Usage: don factory upgrade <slug> [--reason "<reason>"]');
+          return 2;
+        }
+        const reason =
+          typeof parsed.values.reason === 'string' && parsed.values.reason.trim()
+            ? parsed.values.reason.trim()
+            : undefined;
+        try {
+          const wf = await runMetaWorkflow(db, {
+            workflow: 'factory.upgrade',
+            factorySlug: slug,
+            reason,
+          });
+          if (wf.workflow !== 'factory.upgrade' || wf.replay.status === 'interrupted') {
+            writeLine(errOut, `Factory upgrade workflow for "${slug}" was interrupted.`);
+            return 1;
+          }
+          const res = wf.replay.value;
+          emitResult(
+            asJson,
+            { ok: true, ...res },
+            [
+              res.upgraded
+                ? `Upgraded "${res.factory.slug}" from v${res.fromVersion} -> v${res.toVersion} (skillsSynced=${res.skillsSynced})`
+                : `Factory "${res.factory.slug}" is already up to date at v${res.toVersion}.`,
+            ],
+            out,
+          );
+          return 0;
+        } catch (err) {
+          writeLine(errOut, err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+
+      if (action === 'audit') {
+        const slug = rest[1]?.trim() || undefined;
+        const wf = await runMetaWorkflow(db, {
+          workflow: 'factory.audit',
+          factorySlug: slug,
+        });
+        if (wf.workflow !== 'factory.audit') return 1;
+        const { report } = wf;
+        emitResult(
+          asJson,
+          { ok: true, report },
+          [
+            `Fleet Audit: ${report.totalFactories} active factory(ies), drifted=${report.driftedSlugs.length}, unhealthy=${report.unhealthySlugs.length}`,
+            ...report.rows.map(
+              (r) =>
+                `  - ${r.slug} [${r.state}] tpl=${r.templateId}@v${r.currentTemplateVersion}/v${r.latestTemplateVersion} wal=${r.journalMode} pending=${r.pendingDecisions} mail=${r.unreadMailbox}`,
+            ),
+          ],
+          out,
+        );
+        return 0;
+      }
+
+      if (action === 'changelog') {
+        const targetId = rest[1]?.trim() || undefined;
+        const entries = listChangelogs(db, { targetId, limit: 30 });
+        emitResult(
+          asJson,
+          { entries },
+          entries.length === 0
+            ? ['No factory or template changelogs recorded yet.']
+            : [
+                `Meta Changelogs (${entries.length}):`,
+                ...entries.map(
+                  (e) =>
+                    `  - [${e.status}] ${e.scope}:${e.targetId} (${e.kind}) · ${e.diffSummary}`,
+                ),
+              ],
+          out,
+        );
+        return 0;
+      }
+
+      if (action === 'archive') {
+        const slug = rest[1]?.trim() ?? '';
+        if (!slug) {
+          writeLine(errOut, 'Usage: don factory archive <slug> [--reason "<reason>"]');
+          return 2;
+        }
+        const reason =
+          typeof parsed.values.reason === 'string' && parsed.values.reason.trim()
+            ? parsed.values.reason.trim()
+            : undefined;
+        try {
+          const archived = archiveFactory(db, slug, reason);
+          emitResult(
+            asJson,
+            { ok: true, factory: archived },
+            [`Archived factory "${archived.slug}".`],
+            out,
+          );
+          return 0;
+        } catch (err) {
+          writeLine(errOut, err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+
+      if (action === 'mailbox') {
+        const mailAction = rest[1] ?? 'list';
+        const accessKey = ensureAccessKey(initInfo.donDir);
+
+        if (mailAction === 'list') {
+          const toFactory =
+            typeof parsed.values.to === 'string' && parsed.values.to.trim()
+              ? parsed.values.to.trim()
+              : 'meta-lead';
+          const messages = factoryMailboxList(db, {
+            metaDonDir: initInfo.donDir,
+            accessKey,
+            toFactory,
+          });
+          emitResult(
+            asJson,
+            { toFactory, messages },
+            messages.length === 0
+              ? [`No mailbox messages for "${toFactory}".`]
+              : [
+                  `Mailbox for "${toFactory}" (${messages.length}):`,
+                  ...messages.map(
+                    (m) => `  - ${m.id} [${m.status}] ${m.fromFactory} -> ${m.subject} (${m.kind})`,
+                  ),
+                ],
+            out,
+          );
+          return 0;
+        }
+
+        if (mailAction === 'send') {
+          const fromFactory =
+            typeof parsed.values.from === 'string' ? parsed.values.from.trim() : '';
+          const toFactory = typeof parsed.values.to === 'string' ? parsed.values.to.trim() : '';
+          const subject =
+            typeof parsed.values.subject === 'string' ? parsed.values.subject.trim() : '';
+          const body = typeof parsed.values.body === 'string' ? parsed.values.body : '';
+          const kind =
+            typeof parsed.values.kind === 'string' && parsed.values.kind.trim()
+              ? (parsed.values.kind.trim() as MailboxMessageKind)
+              : 'notify';
+          if (!fromFactory || !toFactory || !subject || !body) {
+            writeLine(
+              errOut,
+              'Usage: don factory mailbox send --from <slug> --to <slug> --subject "<subject>" --body "<body>" [--kind notify|request_change]',
+            );
+            return 2;
+          }
+          const sent = await factoryMailboxSend(db, {
+            metaDonDir: initInfo.donDir,
+            accessKey,
+            fromFactory,
+            toFactory,
+            subject,
+            body,
+            kind,
+          });
+          emitResult(
+            asJson,
+            sent,
+            [
+              sent.blocked
+                ? `Mailbox message ${sent.message.id} BLOCKED (${sent.reason ?? 'awaiting DecisionCard'})`
+                : `Mailbox message ${sent.message.id} queued (${fromFactory} -> ${toFactory})`,
+            ],
+            out,
+          );
+          return sent.blocked ? 1 : 0;
+        }
+
+        if (mailAction === 'read') {
+          const messageId = rest[2]?.trim() ?? '';
+          const toFactory =
+            typeof parsed.values.to === 'string' && parsed.values.to.trim()
+              ? parsed.values.to.trim()
+              : 'meta-lead';
+          if (!messageId) {
+            writeLine(errOut, 'Usage: don factory mailbox read <messageId> [--to <slug>]');
+            return 2;
+          }
+          try {
+            const message = factoryMailboxRead(db, {
+              metaDonDir: initInfo.donDir,
+              accessKey,
+              messageId,
+              toFactory,
+            });
+            emitResult(
+              asJson,
+              { ok: true, message },
+              [
+                `Message ${message.id} [${message.status}] from=${message.fromFactory}\n${message.body}`,
+              ],
+              out,
+            );
+            return 0;
+          } catch (err) {
+            writeLine(errOut, err instanceof Error ? err.message : String(err));
+            return 1;
+          }
+        }
+
+        writeLine(errOut, `Unknown mailbox subcommand "${mailAction}". Expected: list, send, read`);
+        return 2;
+      }
+
+      writeLine(
+        errOut,
+        `Unknown factory subcommand "${action}". Expected: list, spawn, hire, upgrade, audit, changelog, archive, mailbox`,
+      );
+      return 2;
+    } finally {
+      db.close();
+    }
   }
 
   if (command === 'test:crash') {

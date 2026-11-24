@@ -16,6 +16,7 @@ export type DonEventKind =
   | 'verifier'
   | 'channel'
   | 'rollback'
+  | 'meta'
   | 'system';
 
 export interface DonEventRecord {

@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@don-bot/channels": "workspace:*",
+    "@don-bot/meta": "workspace:*",
     "@don-bot/spine": "workspace:*",
     "@don-bot/team": "workspace:*",
     "@don-bot/trust": "workspace:*"

@@ -227,6 +227,79 @@ CREATE TABLE IF NOT EXISTS don_provider_credentials (
   source TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS don_meta_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  parent_template_id TEXT,
+  description TEXT NOT NULL,
+  manifest_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS don_meta_factories (
+  slug TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'empty',
+  template_id TEXT NOT NULL,
+  template_version INTEGER NOT NULL,
+  workspace_dir TEXT NOT NULL,
+  db_path TEXT NOT NULL,
+  owner_agent_id TEXT,
+  mission TEXT,
+  telegram_topic_id TEXT,
+  daily_cap_usd REAL NOT NULL DEFAULT 5.0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS don_meta_owners (
+  id TEXT PRIMARY KEY,
+  factory_slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  mission TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  approved_turn_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS don_factory_changelogs (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  actor_agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  decision_card_id TEXT,
+  owner_quote_turn_id TEXT,
+  diff_summary TEXT NOT NULL,
+  rollback_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_don_factory_changelogs_target ON don_factory_changelogs(scope, target_id, created_at);
+
+CREATE TABLE IF NOT EXISTS don_factory_mailbox (
+  id TEXT PRIMARY KEY,
+  from_factory TEXT NOT NULL,
+  to_factory TEXT NOT NULL,
+  sender_agent_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_wrapped TEXT NOT NULL,
+  raw_body TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'notify',
+  status TEXT NOT NULL DEFAULT 'queued',
+  jev_decision TEXT NOT NULL,
+  jev_score REAL,
+  decision_card_id TEXT,
+  created_at INTEGER NOT NULL,
+  read_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_don_factory_mailbox_to ON don_factory_mailbox(to_factory, status, created_at);
 `;
 
 export class DonDatabase {

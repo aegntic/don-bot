@@ -9,7 +9,9 @@ export type A2UIComponentType =
   | 'WorktreeLane'
   | 'GuardAlert'
   | 'RunTimeline'
-  | 'OutcomeReceipt';
+  | 'OutcomeReceipt'
+  | 'FactoryCard'
+  | 'FactoryChangelogCard';
 
 export type A2UIPropKind = 'string' | 'number' | 'boolean' | 'array' | 'stringOrNull';
 
@@ -107,6 +109,32 @@ export const DON_CATALOG_SPECS: Readonly<Record<A2UIComponentType, DonCatalogCom
       mergeCommit: 'string',
     },
     allowedActions: ['receipt.view_commit'],
+  },
+  FactoryCard: {
+    requiredProps: {
+      slug: 'string',
+      name: 'string',
+      state: 'string',
+      templateId: 'string',
+      templateVersion: 'number',
+      ownerAgentId: 'stringOrNull',
+      pendingDecisions: 'number',
+      unreadMail: 'number',
+    },
+    allowedActions: ['factory.inspect', 'factory.upgrade', 'factory.archive'],
+  },
+  FactoryChangelogCard: {
+    requiredProps: {
+      entryId: 'string',
+      scope: 'string',
+      targetId: 'string',
+      actorAgentId: 'string',
+      kind: 'string',
+      reason: 'string',
+      status: 'string',
+      diffSummary: 'string',
+    },
+    allowedActions: ['changelog.view_diff', 'changelog.rollback'],
   },
 };
 

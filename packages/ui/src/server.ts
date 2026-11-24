@@ -2,6 +2,13 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { detectRemoteTunnelTools } from '@don-bot/channels';
 import {
+  factoryMailboxList,
+  listChangelogs,
+  listFactories,
+  listOwners,
+  listTemplates,
+} from '@don-bot/meta';
+import {
   appendEvent,
   getOnboardingStatus,
   loadDonConfig,
@@ -618,6 +625,35 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
           }
           return jsonResponse({ ok: true, session });
         }
+      }
+
+      if (pathname === '/api/meta/status' && req.method === 'GET') {
+        return jsonResponse({
+          ok: true,
+          templates: listTemplates(db),
+          factories: listFactories(db),
+          owners: listOwners(db),
+          recentChangelogs: listChangelogs(db, { limit: 25 }),
+        });
+      }
+
+      if (pathname === '/api/meta/mailbox' && req.method === 'GET') {
+        const toFactory = url.searchParams.get('to')?.trim() || 'meta-lead';
+        const rawStatus = url.searchParams.get('status')?.trim();
+        const status =
+          rawStatus === 'queued' || rawStatus === 'read' || rawStatus === 'blocked'
+            ? rawStatus
+            : undefined;
+        return jsonResponse({
+          ok: true,
+          toFactory,
+          messages: factoryMailboxList(db, {
+            metaDonDir: donDir,
+            accessKey,
+            toFactory,
+            status,
+          }),
+        });
       }
 
       return jsonResponse({ ok: false, error: 'Not found' }, 404);

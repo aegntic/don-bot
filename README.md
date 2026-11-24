@@ -2,7 +2,7 @@
 
 A single-box, local-first autonomous software factory powered by `@earendil-works/pi-durable`, `@earendil-works/chord`, SQLite WAL (`node:sqlite`), `oxc.rs` (`oxlint`/`oxfmt`), `huggingface/safeagents`, and [NVIDIA/SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator).
 
-> **Branch Status (`dev/full-factory`):** Complete end-to-end build covering **Slices 01–05** (Durable Spine, 4-Layer Trust + Rust `don-guard` + `trust-jev` + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, and A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast). Public `main` (`v0.1.0-slice-01`) remains preserved separately for the Dec 1 Slice 01 drop.
+> **Branch Status (`dev/full-factory`):** Complete end-to-end build covering **Slices 01–06** (Durable Spine, 4-Layer Trust + Rust `don-guard` + `trust-jev` + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Public `main` (`v0.1.0-slice-01`) remains preserved separately for the Dec 1 Slice 01 drop.
 
 ---
 
@@ -65,6 +65,8 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 | `don channel status` | Inspect `@mtcute/bun` Telegram "Me" Mode driver, `EXCLUSIONS.txt`, and tunnel tools |
 | `don tunnel <tailscale\|cloudflared>` | Print zero-port remote access command (`tailscale serve` / `cloudflared`) and detect binaries |
 | `don skills <status\|eval\|harness\|history\|block\|log-only\|install>` | Run core NVIDIA SkillEvaluator checks, 6-harness checks, history, and gate mode |
+| `don template <list\|clone>` | List or clone versioned Blank Factory Templates (`don-core-v1`) |
+| `don factory <list\|spawn\|hire\|upgrade\|audit\|changelog\|archive\|mailbox>` | Manage Meta-Factory child workspaces, 1:1 owners, upgrades, and Jev-gated mailbox |
 | `don worktree gc [--dir <path>]` | Prune merged or orphaned `.don/worktrees/*` checkouts and clean `don/*` branches |
 | `don test:crash` | Run Chaos Test 1 (`SIGKILL` + `once()` recovery) |
 
@@ -118,10 +120,11 @@ bun run don skills harness --dir /path/to/your-repo
 | `tests/chaos/10-slice05-a2ui-cockpit.test.ts` | A2UI `v1.0` `don.catalog.v1`, TS Macro Expander, `.don/access-key` SSE, Preview CSP & headless Chromium CDP |
 | `tests/chaos/11-jev-system-one-agents.test.ts` | Live Jev wire protocol (`typesafe`/`openrouter`/`openai`), 45-feature GBDT ensemble, and 5 factory Jev gates |
 | `tests/chaos/12-onboarding-oauth-vault.test.ts` | Encrypted `VaultCredentialStore`, 1-login OpenRouter OAuth (+ auto-Jev), single-use Cockpit pairing codes & CLI auth lifecycle |
+| `tests/chaos/13-slice06-meta-factory.test.ts` | Meta-Factory template cloning, Liquid Boundary, SkillEvaluator backport gate, 3-state fleet lifecycle, Jev mailbox & heartbeat |
 
 ---
 
-## 5-Slice Architecture Roadmap
+## 6-Slice Architecture Roadmap
 
 | Slice | Scope | Status |
 | :--- | :--- | :--- |
@@ -130,6 +133,7 @@ bun run don skills harness --dir /path/to/your-repo
 | **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`dev/full-factory`)** |
 | **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`dev/full-factory`)** |
 | **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`dev/full-factory`)** |
+| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`dev/full-factory`)** |
 
 ---
 

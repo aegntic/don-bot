@@ -30,10 +30,20 @@
       },
       "dependencies": {
         "@don-bot/channels": "workspace:*",
+        "@don-bot/meta": "workspace:*",
         "@don-bot/spine": "workspace:*",
         "@don-bot/team": "workspace:*",
         "@don-bot/trust": "workspace:*",
         "@don-bot/ui": "workspace:*",
+      },
+    },
+    "packages/meta": {
+      "name": "@don-bot/meta",
+      "version": "0.1.0-alpha.0",
+      "dependencies": {
+        "@don-bot/spine": "workspace:*",
+        "@don-bot/team": "workspace:*",
+        "@don-bot/trust": "workspace:*",
       },
     },
     "packages/spine": {
@@ -65,6 +75,7 @@
       "version": "0.1.0-alpha.0",
       "dependencies": {
         "@don-bot/channels": "workspace:*",
+        "@don-bot/meta": "workspace:*",
         "@don-bot/spine": "workspace:*",
         "@don-bot/team": "workspace:*",
         "@don-bot/trust": "workspace:*",
@@ -117,6 +128,8 @@
     "@don-bot/channels": ["@don-bot/channels@workspace:packages/channels"],
 
     "@don-bot/cli": ["@don-bot/cli@workspace:packages/cli"],
+
+    "@don-bot/meta": ["@don-bot/meta@workspace:packages/meta"],
 
     "@don-bot/spine": ["@don-bot/spine@workspace:packages/spine"],
 

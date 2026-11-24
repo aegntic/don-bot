@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { listChangelogs, listFactories } from '@don-bot/meta';
 import {
   getBudgetSnapshot,
   listDecisionCards,
   listSkillEvalRuns,
+  openDonDb,
   readEventsAfter,
   type DecisionCard,
   type DonConfig,
@@ -28,7 +30,9 @@ export type A2UIMacroName =
   | 'code_gate_report'
   | 'skill_eval_report'
   | 'worktree_diff_summary'
-  | 'guard_event_feed';
+  | 'guard_event_feed'
+  | 'factory_fleet_summary'
+  | 'factory_changelog_feed';
 
 export interface ParsedA2UIMacro {
   readonly name: A2UIMacroName;
@@ -62,7 +66,7 @@ export interface ZeroLlmDataPatch {
 }
 
 const MACRO_PATTERN =
-  /\b(decision_card|code_gate_report|skill_eval_report|worktree_diff_summary|guard_event_feed)\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([a-zA-Z0-9_.-]+))\s*\)/g;
+  /\b(decision_card|code_gate_report|skill_eval_report|worktree_diff_summary|guard_event_feed|factory_fleet_summary|factory_changelog_feed)\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([a-zA-Z0-9_.-]+))\s*\)/g;
 
 /**
  * Parse compact A2UI Express macro calls emitted by an agent turn.
@@ -270,6 +274,25 @@ function codeGateEventToNode(
   };
 }
 
+function countFactoryPendingDecisions(dbPath: string): number {
+  if (!existsSync(dbPath)) return 0;
+  const child = openDonDb(dbPath);
+  try {
+    return listDecisionCards(child, 'pending').length;
+  } finally {
+    child.close();
+  }
+}
+
+function countUnreadFactoryMail(db: DonDatabase, slug: string): number {
+  const row = db.raw
+    .prepare(
+      `SELECT COUNT(*) AS count FROM don_factory_mailbox WHERE to_factory = ? AND status = 'queued'`,
+    )
+    .get(slug) as { count?: number } | undefined;
+  return Number(row?.count ?? 0);
+}
+
 /**
  * Expand A2UI Express macros into a validated A2UI v1.0 surface hydrated
  * directly from SQLite WAL & local git state without leaking raw logs or diffs
@@ -290,11 +313,15 @@ export function expandA2UIMacros(
     skillEval: Record<string, unknown>;
     worktreeDiff: Record<string, unknown>;
     guardFeed: unknown[];
+    metaFleet: unknown[];
+    metaChangelogs: unknown[];
   } = {
     codeGate: {},
     skillEval: {},
     worktreeDiff: {},
     guardFeed: [],
+    metaFleet: [],
+    metaChangelogs: [],
   };
 
   for (const macro of macros) {
@@ -432,6 +459,88 @@ export function expandA2UIMacros(
         });
       }
       safeEchoLines.push(`[macro:guard_event_feed count=${events.length}]`);
+      continue;
+    }
+
+    if (macro.name === 'factory_fleet_summary') {
+      const limit = Math.max(1, Math.min(Number.parseInt(macro.argValue, 10) || 20, 100));
+      const factories = listFactories(db).slice(0, limit);
+      for (const factory of factories) {
+        const pendingDecisions = countFactoryPendingDecisions(factory.dbPath);
+        const unreadMail = countUnreadFactoryMail(db, factory.slug);
+        components.push({
+          id: `factory-${factory.slug}`,
+          component: 'FactoryCard',
+          props: {
+            slug: factory.slug,
+            name: factory.name,
+            state: factory.state,
+            templateId: factory.templateId,
+            templateVersion: factory.templateVersion,
+            ownerAgentId: factory.ownerAgentId,
+            pendingDecisions,
+            unreadMail,
+          },
+          actions: [
+            { id: 'factory.inspect', label: 'Inspect', payload: { slug: factory.slug } },
+            { id: 'factory.upgrade', label: 'Upgrade', payload: { slug: factory.slug } },
+          ],
+        });
+        serverHydratedOnly.metaFleet.push({
+          slug: factory.slug,
+          workspaceDir: factory.workspaceDir,
+          dbPath: factory.dbPath,
+          mission: factory.mission,
+          dailyCapUsd: factory.dailyCapUsd,
+        });
+      }
+      safeEchoLines.push(`[macro:factory_fleet_summary count=${factories.length}]`);
+      continue;
+    }
+
+    if (macro.name === 'factory_changelog_feed') {
+      const targetId = macro.argValue.trim();
+      const entries = listChangelogs(db, {
+        ...(targetId && targetId !== 'all' ? { targetId } : {}),
+        limit: 20,
+      });
+      for (const entry of entries) {
+        components.push({
+          id: `changelog-${entry.id}`,
+          component: 'FactoryChangelogCard',
+          props: {
+            entryId: entry.id,
+            scope: entry.scope,
+            targetId: entry.targetId,
+            actorAgentId: entry.actorAgentId,
+            kind: entry.kind,
+            reason: entry.reason,
+            status: entry.status,
+            diffSummary: entry.diffSummary,
+          },
+          actions: [
+            { id: 'changelog.view_diff', label: 'View Diff', payload: { entryId: entry.id } },
+            ...(entry.rollbackRef
+              ? [
+                  {
+                    id: 'changelog.rollback',
+                    label: 'Rollback',
+                    payload: { entryId: entry.id, rollbackRef: entry.rollbackRef },
+                  },
+                ]
+              : []),
+          ],
+        });
+        serverHydratedOnly.metaChangelogs.push({
+          entryId: entry.id,
+          decisionCardId: entry.decisionCardId,
+          ownerQuoteTurnId: entry.ownerQuoteTurnId,
+          rollbackRef: entry.rollbackRef,
+        });
+      }
+      safeEchoLines.push(
+        `[macro:factory_changelog_feed target_id=${targetId || 'all'} count=${entries.length}]`,
+      );
     }
   }
 
