@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   appendEvent,
   createRollbackCheckpoint,
@@ -19,7 +19,12 @@ import {
   writeFactorySkills,
   type MetaFactoryRecord,
 } from './registry.ts';
-import { assertApprovedDecisionCard, writeChangelogRow } from './roles.ts';
+import {
+  assertApprovedDecisionCard,
+  assertLiquidBoundary,
+  completeChangelogRow,
+  writeChangelogRow,
+} from './roles.ts';
 import { applyTemplateBackport, getTemplate, type FactoryTemplateRecord } from './templates.ts';
 
 export const META_WORKFLOW_NAMES = [
@@ -103,6 +108,7 @@ export type MetaWorkflowInput =
       readonly decisionCardId?: string;
       readonly requireApproval?: boolean;
       readonly ownerQuoteTurnId?: string;
+      readonly changelogId?: string;
     }
   | {
       readonly workflow: 'factory.audit';
@@ -272,12 +278,16 @@ export async function runMetaWorkflow(
       replay: 'safe',
     },
     async (): Promise<FactoryUpgradeResult> => {
-      if (options.requireApproval) {
-        assertApprovedDecisionCard(db, {
+      const requireApproval = options.requireApproval ?? true;
+      let effectiveTurnId: string | null = options.ownerQuoteTurnId ?? null;
+      if (requireApproval) {
+        const verified = assertApprovedDecisionCard(db, {
           decisionCardId: options.decisionCardId,
           expectedKind: 'meta_factory_upgrade',
+          expectedTaskId: `factory:${factory.slug}`,
           ownerQuoteTurnId: options.ownerQuoteTurnId,
         });
+        effectiveTurnId = verified.effectiveTurnId;
       }
 
       if (factory.templateVersion >= template.version) {
@@ -291,7 +301,6 @@ export async function runMetaWorkflow(
         };
       }
 
-      const skillsSynced = writeFactorySkills(factory.workspaceDir, template.manifest.skills);
       let rollbackRef: string | null = null;
       if (existsSync(join(factory.workspaceDir, '.git'))) {
         try {
@@ -307,48 +316,91 @@ export async function runMetaWorkflow(
         }
       }
 
-      const now = Date.now();
-      const updated = db.transaction(() => {
-        db.raw
-          .prepare(
-            `UPDATE don_meta_factories SET template_version = ?, updated_at = ? WHERE slug = ?`,
-          )
-          .run(template.version, now, factory.slug);
-
-        writeChangelogRow(db, {
-          scope: 'factory',
-          targetId: factory.slug,
-          actorAgentId: factory.ownerAgentId ?? 'meta-factory',
-          kind: 'factory_upgrade',
-          reason:
-            options.reason?.trim() ||
-            `Upgrade "${factory.slug}" to ${template.id}@v${template.version}`,
-          decisionCardId: options.decisionCardId ?? null,
-          ownerQuoteTurnId: options.ownerQuoteTurnId ?? null,
-          diffSummary: `Upgraded ${template.id} v${factory.templateVersion} -> v${template.version} (${skillsSynced} skills synced)`,
-          rollbackRef,
-          status: 'completed',
-          now,
-        });
-
-        appendEvent(db, {
-          runId: `factory:${factory.slug}`,
-          agentId: factory.ownerAgentId ?? 'meta-factory',
-          kind: 'meta',
-          payload: {
-            action: 'factory_upgraded',
-            slug: factory.slug,
-            templateId: template.id,
-            fromVersion: factory.templateVersion,
-            toVersion: template.version,
-            skillsSynced,
-            rollbackRef,
-          },
-          now,
-        });
-
-        return getFactory(db, factory.slug)!;
+      const skillSnapshots = template.manifest.skills.map((skill) => {
+        const relPath = assertLiquidBoundary(`.don/skills/${skill.name}/SKILL.md`);
+        const absPath = join(factory.workspaceDir, relPath);
+        const existed = existsSync(absPath);
+        return {
+          absPath,
+          existed,
+          previousContent: existed ? readFileSync(absPath, 'utf8') : null,
+        };
       });
+
+      let skillsSynced = 0;
+      const now = Date.now();
+      let updated: MetaFactoryRecord;
+      try {
+        skillsSynced = writeFactorySkills(factory.workspaceDir, template.manifest.skills);
+        updated = db.transaction(() => {
+          db.raw
+            .prepare(
+              `UPDATE don_meta_factories SET template_version = ?, updated_at = ? WHERE slug = ?`,
+            )
+            .run(template.version, now, factory.slug);
+
+          const diffSummary = `Upgraded ${template.id} v${factory.templateVersion} -> v${template.version} (${skillsSynced} skills synced)`;
+          if (options.changelogId) {
+            completeChangelogRow(db, {
+              id: options.changelogId,
+              status: 'completed',
+              ownerQuoteTurnId: effectiveTurnId,
+              diffSummary,
+              rollbackRef,
+              now,
+            });
+          } else {
+            writeChangelogRow(db, {
+              scope: 'factory',
+              targetId: factory.slug,
+              actorAgentId: factory.ownerAgentId ?? 'meta-factory',
+              kind: 'factory_upgrade',
+              reason:
+                options.reason?.trim() ||
+                `Upgrade "${factory.slug}" to ${template.id}@v${template.version}`,
+              decisionCardId: options.decisionCardId ?? null,
+              ownerQuoteTurnId: effectiveTurnId,
+              diffSummary,
+              rollbackRef,
+              status: 'completed',
+              now,
+            });
+          }
+
+          appendEvent(db, {
+            runId: `factory:${factory.slug}`,
+            agentId: factory.ownerAgentId ?? 'meta-factory',
+            kind: 'meta',
+            payload: {
+              action: 'factory_upgraded',
+              slug: factory.slug,
+              templateId: template.id,
+              fromVersion: factory.templateVersion,
+              toVersion: template.version,
+              skillsSynced,
+              rollbackRef,
+            },
+            now,
+          });
+
+          return getFactory(db, factory.slug)!;
+        });
+      } catch (err) {
+        // Restore prior skill files on DB failure so disk and SQLite never diverge
+        for (const snap of skillSnapshots) {
+          try {
+            if (snap.existed && snap.previousContent !== null) {
+              mkdirSync(dirname(snap.absPath), { recursive: true });
+              writeFileSync(snap.absPath, snap.previousContent, 'utf8');
+            } else if (existsSync(snap.absPath)) {
+              rmSync(snap.absPath, { force: true });
+            }
+          } catch {
+            // Best-effort cleanup; original error takes precedence
+          }
+        }
+        throw err;
+      }
 
       return {
         factory: updated,

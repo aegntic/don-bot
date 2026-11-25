@@ -277,7 +277,7 @@ async function evaluateSkillContent(
     return await runSkillEvaluator({
       targetPath: skillDir,
       cwd: scratchRoot,
-      forceFallback: options.faux ?? true,
+      forceFallback: options.faux ?? false,
       minScore: options.minScore ?? 70,
     });
   } finally {
@@ -325,7 +325,7 @@ export async function proposeTemplateBackport(
   if (input.skill) {
     assertLiquidBoundary(`skills/${input.skill.name}/SKILL.md`);
     skillReport = await evaluateSkillContent(input.skill, {
-      faux: input.faux ?? true,
+      faux: input.faux ?? false,
       minScore: input.minScore ?? 70,
     });
 
@@ -454,6 +454,7 @@ export async function applyTemplateBackport(
   const { effectiveTurnId } = assertApprovedDecisionCard(db, {
     decisionCardId: input.decisionCardId,
     expectedKind: 'meta_template_backport',
+    expectedTaskId: `backport:${template.id}`,
     ownerQuoteTurnId: input.ownerQuoteTurnId,
   });
 
@@ -464,7 +465,7 @@ export async function applyTemplateBackport(
   let skillScore: number | undefined;
   if (input.skill) {
     const report = await evaluateSkillContent(input.skill, {
-      faux: input.faux ?? true,
+      faux: input.faux ?? false,
       minScore: input.minScore ?? 70,
     });
     if (!report.passed) {

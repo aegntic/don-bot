@@ -122,3 +122,39 @@ pub fn mask_secrets(input: &str, secrets: &[Zeroizing<String>]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_key_length_and_masks_short_vs_real_secrets() {
+        assert!(decode_key("aW52YWxpZA==").is_err());
+        let valid_b64 = STANDARD.encode([42u8; 32]);
+        let key = decode_key(&valid_b64).unwrap();
+        assert_eq!(key.len(), 32);
+
+        let masked = mask_secrets(
+            "abc leaked ghp_1234567890 in log",
+            &[Zeroizing::new("abc".to_string()), Zeroizing::new("ghp_1234567890".to_string())],
+        );
+        assert_eq!(masked, "abc leaked [REDACTED:VAULT] in log");
+    }
+
+    #[test]
+    fn rejects_luhn_pan_and_tampered_ciphertext() {
+        let key = decode_key(&STANDARD.encode([9u8; 32])).unwrap();
+        let binding = vec!["service".to_string(), "prod".to_string()];
+
+        assert!(looks_like_payment_card("4111-1111-1111-1111"));
+        assert!(!looks_like_payment_card("ghp_notACardNumber1234"));
+        assert!(seal_secret(&key, &binding, "4111 1111 1111 1111").is_err());
+
+        let sealed = seal_secret(&key, &binding, "or-v1-secret-token").unwrap();
+        let mut raw = STANDARD.decode(&sealed).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        let tampered = STANDARD.encode(raw);
+        assert!(open_secret(&key, &binding, &tampered).is_err());
+    }
+}

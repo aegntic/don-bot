@@ -24,6 +24,7 @@ import {
   MailboxAuthError,
   proposeTemplateBackport,
   requestFactorySpawn,
+  requestFactoryUpgrade,
   requestHireOwner,
   runMetaLeadHeartbeat,
   runMetaWorkflow,
@@ -368,10 +369,28 @@ describe('Chaos Test 13: Slice 06 Meta-Factory fleet, template backports, Jev ma
         expect(heartbeat.driftedFactories).toEqual(['notes-factory']);
       }
 
+      // factory.upgrade must fail closed without an owner-approved DecisionCard
+      await expect(
+        runMetaWorkflow(db, {
+          workflow: 'factory.upgrade',
+          factorySlug: 'notes-factory',
+          reason: 'Should fail without DecisionCard',
+        }),
+      ).rejects.toThrow(/Missing owner approval/i);
+
+      const upgradeReq = requestFactoryUpgrade(db, {
+        factorySlug: 'notes-factory',
+        reason: 'Sync don-core-v1@v2 changelog-digest skill',
+      });
+      resolveDecisionCard(db, upgradeReq.decisionCard.id, 'Approve Upgrade', hireTurnId);
+
       const upgradeOut = await runMetaWorkflow(db, {
         workflow: 'factory.upgrade',
         factorySlug: 'notes-factory',
         reason: 'Sync don-core-v1@v2 changelog-digest skill',
+        decisionCardId: upgradeReq.decisionCard.id,
+        ownerQuoteTurnId: hireTurnId,
+        changelogId: upgradeReq.changelogId,
       });
       if (upgradeOut.workflow !== 'factory.upgrade' || upgradeOut.replay.status === 'interrupted') {
         throw new Error('Expected executed factory.upgrade');

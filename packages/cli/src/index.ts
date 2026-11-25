@@ -21,6 +21,7 @@ import {
   listFactories,
   listTemplates,
   requestFactorySpawn,
+  requestFactoryUpgrade,
   requestHireOwner,
   runMetaWorkflow,
   type MailboxMessageKind,
@@ -1509,10 +1510,23 @@ export async function runCli(
             ? parsed.values.reason.trim()
             : undefined;
         try {
+          const req = requestFactoryUpgrade(db, { factorySlug: slug, reason });
+          const turnId = `cli-meta-${randomUUID().slice(0, 12)}`;
+          recordTurn(db, {
+            turnId,
+            sessionId: `factory:${slug}`,
+            ownerText: `don factory upgrade ${slug}`,
+            status: 'done',
+          });
+          resolveDecisionCard(db, req.decisionCard.id, 'Approve Upgrade', turnId);
+
           const wf = await runMetaWorkflow(db, {
             workflow: 'factory.upgrade',
             factorySlug: slug,
             reason,
+            decisionCardId: req.decisionCard.id,
+            ownerQuoteTurnId: turnId,
+            changelogId: req.changelogId,
           });
           if (wf.workflow !== 'factory.upgrade' || wf.replay.status === 'interrupted') {
             writeLine(errOut, `Factory upgrade workflow for "${slug}" was interrupted.`);

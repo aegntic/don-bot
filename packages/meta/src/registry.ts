@@ -299,6 +299,7 @@ export function spawnFactory(
     const verified = assertApprovedDecisionCard(db, {
       decisionCardId: input.decisionCardId,
       expectedKind: 'meta_factory_spawn',
+      expectedTaskId: `factory:${slug}`,
       ownerQuoteTurnId: input.ownerQuoteTurnId,
     });
     effectiveTurnId = verified.effectiveTurnId;
@@ -495,6 +496,7 @@ export function hireFactoryOwner(
     const verified = assertApprovedDecisionCard(db, {
       decisionCardId: input.decisionCardId,
       expectedKind: 'meta_owner_hire',
+      expectedTaskId: `factory:${slug}`,
       ownerQuoteTurnId: input.ownerQuoteTurnId,
     });
     effectiveTurnId = verified.effectiveTurnId;
@@ -611,6 +613,67 @@ export function archiveFactory(
     });
     return getFactory(db, validSlug)!;
   });
+}
+
+/**
+ * Request owner DecisionCard approval to upgrade an existing child factory to the latest template version.
+ */
+export function requestFactoryUpgrade(
+  db: DonDatabase,
+  input: {
+    readonly factorySlug: string;
+    readonly reason?: string;
+  },
+): { readonly decisionCard: DecisionCard; readonly changelogId: string } {
+  const slug = validateFactorySlug(input.factorySlug);
+  const factory = getFactory(db, slug);
+  if (!factory) {
+    throw new Error(`Factory "${slug}" not found.`);
+  }
+  const template = getTemplate(db, factory.templateId);
+  if (!template) {
+    throw new Error(`Template "${factory.templateId}" for "${slug}" not found.`);
+  }
+
+  const reason =
+    input.reason?.trim() ||
+    `Upgrade "${slug}" from ${template.id}@v${factory.templateVersion} to v${template.version}`;
+  const card = createDecisionCard(db, {
+    sourceAgentId: factory.ownerAgentId ?? 'meta-factory',
+    taskId: `factory:${slug}`,
+    kind: 'meta_factory_upgrade',
+    question: `Upgrade factory "${factory.name}" (${slug}) from ${template.id}@v${factory.templateVersion} to v${template.version}? Reason: ${reason}`,
+    options: ['Approve Upgrade', 'Hold'],
+    idempotencyKey: `meta-upgrade:${slug}:v${factory.templateVersion}-to-v${template.version}`,
+  });
+
+  const changelog = writeChangelogRow(db, {
+    scope: 'factory',
+    targetId: slug,
+    actorAgentId: factory.ownerAgentId ?? 'meta-factory',
+    kind: 'factory_upgrade',
+    reason,
+    decisionCardId: card.id,
+    diffSummary: `Pending upgrade ${template.id} v${factory.templateVersion} -> v${template.version}`,
+    status: 'pending',
+  });
+
+  appendEvent(db, {
+    runId: `factory:${slug}`,
+    agentId: factory.ownerAgentId ?? 'meta-factory',
+    kind: 'meta',
+    payload: {
+      action: 'factory_upgrade_requested',
+      slug,
+      templateId: template.id,
+      fromVersion: factory.templateVersion,
+      toVersion: template.version,
+      decisionCardId: card.id,
+      changelogId: changelog.id,
+    },
+  });
+
+  return { decisionCard: card, changelogId: changelog.id };
 }
 
 export { writeFactorySkills };

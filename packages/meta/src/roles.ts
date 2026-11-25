@@ -349,7 +349,9 @@ export function assertApprovedDecisionCard(
   input: {
     readonly decisionCardId?: string;
     readonly expectedKind?: string;
+    readonly expectedTaskId?: string;
     readonly ownerQuoteTurnId?: string;
+    readonly singleUse?: boolean;
   },
 ): { readonly card: DecisionCard; readonly effectiveTurnId: string | null } {
   if (!input.decisionCardId) {
@@ -367,6 +369,11 @@ export function assertApprovedDecisionCard(
       `DecisionCard "${input.decisionCardId}" has kind "${card.kind}", expected "${input.expectedKind}".`,
     );
   }
+  if (input.expectedTaskId && card.taskId !== input.expectedTaskId) {
+    throw new Error(
+      `DecisionCard "${input.decisionCardId}" is bound to task "${String(card.taskId)}", expected "${input.expectedTaskId}".`,
+    );
+  }
   if (card.status !== 'resolved') {
     throw new Error(`DecisionCard "${input.decisionCardId}" is still pending owner approval.`);
   }
@@ -374,6 +381,24 @@ export function assertApprovedDecisionCard(
     throw new Error(
       `DecisionCard "${input.decisionCardId}" was rejected (${String(card.answer ?? 'empty')}).`,
     );
+  }
+
+  if (input.singleUse !== false) {
+    const usedInChangelog = db.raw
+      .prepare(
+        `SELECT 1 FROM don_factory_changelogs WHERE decision_card_id = ? AND status = 'completed' LIMIT 1`,
+      )
+      .get(card.id);
+    const usedInMailbox = db.raw
+      .prepare(
+        `SELECT 1 FROM don_factory_mailbox WHERE decision_card_id = ? AND status != 'blocked' LIMIT 1`,
+      )
+      .get(card.id);
+    if (usedInChangelog || usedInMailbox) {
+      throw new Error(
+        `DecisionCard "${input.decisionCardId}" has already been consumed and cannot be replayed.`,
+      );
+    }
   }
 
   const effectiveTurnId = input.ownerQuoteTurnId ?? card.ownerQuoteTurnId;

@@ -184,24 +184,29 @@ export async function factoryMailboxSend(
     ownerAuthorizedHosts: [],
   });
 
-  const needsAuthorization = MUTATING_MAIL_KINDS.has(kind) || deterministic.action === 'block';
+  const deterministicBlock = deterministic.action === 'block';
+  const needsAuthorization = MUTATING_MAIL_KINDS.has(kind) || deterministicBlock;
   let status: MailboxMessageStatus = 'queued';
   let jevDecision = 'allow';
   let jevScore: number | null = null;
   let decisionCard: DecisionCard | undefined;
+  let consumedCardId: string | null = null;
   let blockReason: string | undefined;
 
   if (needsAuthorization) {
-    if (input.approvedDecisionCardId) {
-      assertApprovedDecisionCard(db, {
-        decisionCardId: input.approvedDecisionCardId,
-        expectedKind: 'meta_mailbox_approval',
-      });
-      jevDecision = 'allow';
-    } else if (deterministic.action === 'block') {
+    if (deterministicBlock) {
+      // Deterministic SSRF / secret-exfil firewall cannot be bypassed even by a prior approval card
       status = 'blocked';
       jevDecision = 'deny';
       blockReason = `Deterministic trust firewall flagged mailbox message: ${deterministic.reasons.join('; ')}`;
+    } else if (input.approvedDecisionCardId) {
+      assertApprovedDecisionCard(db, {
+        decisionCardId: input.approvedDecisionCardId,
+        expectedKind: 'meta_mailbox_approval',
+        expectedTaskId: `mailbox:${input.toFactory}`,
+      });
+      consumedCardId = input.approvedDecisionCardId;
+      jevDecision = 'allow';
     } else if (input.jevClient) {
       const minProb = input.minConfidence ?? 0.85;
       try {
@@ -215,6 +220,7 @@ export async function factoryMailboxSend(
             kind,
             subject: input.subject,
             bodyLength: input.body.length,
+            bodyPreview: input.body.slice(0, 1500),
           },
           questions: [
             {
@@ -288,7 +294,7 @@ export async function factoryMailboxSend(
       kind: 'meta_mailbox_approval',
       question: `Allow cross-factory ${kind} from "${input.fromFactory}" to "${input.toFactory}" ("${input.subject}")? ${blockReason ?? ''}`,
       options: ['Approve Delivery', 'Block Message'],
-      idempotencyKey: `meta-mail:${input.fromFactory}:${input.toFactory}:${input.subject}`,
+      idempotencyKey: `meta-mail:${input.fromFactory}:${input.toFactory}:${input.subject}:${deterministicBlock ? 'firewall' : 'gate'}`,
       now,
     });
   }
@@ -313,7 +319,7 @@ export async function factoryMailboxSend(
       status,
       jevDecision,
       jevScore,
-      decisionCard?.id ?? null,
+      decisionCard?.id ?? consumedCardId ?? null,
       now,
     );
 

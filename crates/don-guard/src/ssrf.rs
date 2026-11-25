@@ -163,3 +163,56 @@ pub fn check_url(raw_url: &str, supplied_ips: Option<&[IpAddr]>) -> Result<Vec<S
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_non_http_schemes_and_internal_hostnames() {
+        assert!(check_url("file:///etc/passwd", None).is_err());
+        assert!(check_url("gopher://127.0.0.1:70/", None).is_err());
+        assert!(check_url("https://localhost/admin", None).is_err());
+        assert!(check_url("https://metadata.google.internal/computeMetadata/v1/", None).is_err());
+        assert!(check_url("https://svc.cluster.local/api", None).is_err());
+    }
+
+    #[test]
+    fn blocks_private_cgnat_metadata_and_ipv6_bypass_ranges() {
+        let blocked_ips = [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.4.2",
+            "192.168.1.50",
+            "100.64.0.1",
+            "100.127.255.254",
+            "169.254.169.254",
+            "::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "64:ff9b::10.0.0.1",
+            "64:ff9b:1::1",
+        ];
+        for raw in blocked_ips {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(is_blocked_ip(ip).is_some(), "expected IP {raw} to be blocked");
+            let rebinding: &[IpAddr] = &[ip];
+            assert!(
+                check_url("https://public.example/webhook", Some(rebinding)).is_err(),
+                "expected DNS rebinding check to block {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_public_ip_addresses() {
+        let pub_v4: IpAddr = "140.82.121.6".parse().unwrap();
+        let pub_v6: IpAddr = "2606:4700:4700::1111".parse().unwrap();
+        assert!(is_blocked_ip(pub_v4).is_none());
+        assert!(is_blocked_ip(pub_v6).is_none());
+        let ok = check_url("https://api.github.com/zen", Some(&[pub_v4])).unwrap();
+        assert_eq!(ok, vec!["140.82.121.6".to_string()]);
+    }
+}

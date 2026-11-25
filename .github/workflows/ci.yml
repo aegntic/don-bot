@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Rust don-guard & Bun Monorepo Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/don-guard
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Test Rust don-guard security boundary
+        run: cargo test --manifest-path crates/don-guard/Cargo.toml
+
+      - name: Build Rust don-guard release binary
+        run: cargo build --release --manifest-path crates/don-guard/Cargo.toml
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run full monorepo check (typecheck, oxlint, oxfmt, unit + chaos tests)
+        run: bun run check
+
+      - name: Run standalone SIGKILL WAL crash-recovery chaos proof
+        run: bun run test:crash

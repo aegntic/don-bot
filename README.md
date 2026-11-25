@@ -1,8 +1,116 @@
-# Don-Bot — On-the-Run Dark Factory
+<p align="center">
+  <img src="assets/don-bot-cover-16x9.jpg" alt="Don-Bot — On-the-Run Dark Factory" width="100%" />
+</p>
 
-A single-box, local-first autonomous software factory powered by `@earendil-works/pi-durable`, `@earendil-works/chord`, SQLite WAL (`node:sqlite`), `oxc.rs` (`oxlint`/`oxfmt`), `huggingface/safeagents`, and [NVIDIA/SkillEvaluator](https://github.com/NVIDIA/SkillEvaluator).
+<h1 align="center">Don-Bot — On-the-Run Dark Factory</h1>
 
-> **Pre-Release (`v0.6.0-rc.1` on `main`):** Slices 01–06 are available in pre-release at [github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1](https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1) alongside the v1.0 waitlist at [don.aegntic.ai](https://don.aegntic.ai) (Durable Spine, 4-Layer Trust + Rust `don-guard` + System-One Jev + Blind Vault, Core SkillEvaluator Gate, Full Worktree Team + Top-Down Verifier, `@mtcute/bun` Telegram "Me" Mode, OAuth-First Onboarding, A2UI `v1.0` 3-Pane PWA Cockpit + Chromium CDP Screencast, and Meta-Factory Fleet Orchestration). Pre-release `v0.1.0-slice-01` preserves the initial Slice 01 baseline.
+<p align="center">
+  <strong>Local-first, crash-durable autonomous software factory on a single SQLite WAL database &amp; Rust security boundary.</strong><br/>
+  <em>1 Lead + 4 Worktree Specialists · Native Rust <code>don-guard</code> Sandbox &amp; Blind Vault · 45-Feature System-One Jev · A2UI 1.0 Cockpit · Level 4 Meta-Factory</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/aegntic/don-bot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aegntic/don-bot/ci.yml?branch=main&style=flat-square&color=ff5a1f&labelColor=0d1015&label=CI" alt="CI Status" /></a>
+  <a href="https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1"><img src="https://img.shields.io/badge/pre--release-v0.6.0--rc.1-ff5a1f?style=flat-square&labelColor=0d1015" alt="Pre-Release v0.6.0-rc.1" /></a>
+  <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4%20%C2%B7%20TypeScript-3fc1ff?style=flat-square&labelColor=0d1015&logo=bun&logoColor=white" alt="Bun and TypeScript" />
+  <img src="https://img.shields.io/badge/Rust-don--guard-ff5a1f?style=flat-square&labelColor=0d1015&logo=rust&logoColor=white" alt="Rust don-guard" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-64748b?style=flat-square&labelColor=0d1015" alt="Apache-2.0 License" /></a>
+  <a href="https://don.aegntic.ai"><img src="https://img.shields.io/badge/Waitlist-don.aegntic.ai-3fc1ff?style=flat-square&labelColor=0d1015" alt="don.aegntic.ai" /></a>
+</p>
+
+---
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 1                  │
+├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
+│   6 WORKSPACES  │   1 RUST CRATE  │    78 TESTS     │   $0.00 FAUX VERIFIED   │
+│  spine · trust  │    don-guard    │  69 Bun + 9 RS  │    13 Chaos Proofs +    │
+│  team · ui · …  │ AES-GCM · bwrap │  767 Expects    │    8 Co-located Suites  │
+└─────────────────┴─────────────────┴─────────────────┴─────────────────────────┘
+```
+
+> **What Don-Bot solves:** Autonomous coding agents fail in three predictable ways — losing state mid-tool crash, leaking host credentials into untrusted tool contexts, and writing unverified diffs straight onto main. Don-Bot eliminates all three using SQLite WAL `once()` side-effect memos, a compiled Rust `don-guard` boundary, 5 System-One Jev decision gates backed by a 45-feature GBDT ensemble, and isolated per-specialist `git worktree` verification before merge.
+
+---
+
+## System Architecture
+
+```mermaid
+flowchart TB
+  subgraph Operators["Human-Near-The-Loop Surfaces"]
+    CLI["CLI (packages/cli: don init / team / onboard / serve)"]
+    PWA["A2UI v1.0 Cockpit (packages/ui: don.catalog.v1 + CDP)"]
+    TG["Telegram Me-Mode (packages/channels: @mtcute/bun)"]
+  end
+
+  subgraph Spine["Durable Spine (packages/spine)"]
+    WAL["SQLite WAL + once() Memos"]
+    Budget["Spend Circuit Breakers & 30% self_compact"]
+    TurnLock["withTurnLock + FTS5 Quote Memory + Rollbacks"]
+  end
+
+  subgraph Team["Worktree Team & Meta-Factory (packages/team & packages/meta)"]
+    Lead["Lead Orchestrator (canWriteCode=false) & 3-Round Rooms"]
+    Specialists["4 Specialists in Isolated Git Worktrees"]
+    Verifier["Top-Down Verifier + oxc.rs Gate + SkillEvaluator"]
+    Meta["Meta-Factory (Templates, Liquid Boundary, Jev Mailbox)"]
+  end
+
+  subgraph Security["4-Layer Security Boundary (packages/trust & crates/don-guard)"]
+    Jev["System-One Jev + 45-Feature GBDT + 24h Shadow Mode"]
+    SafeAgents["Deterministic SSRF / Exfil Firewall & safeagents Proxy"]
+    RustGuard["Rust don-guard (bwrap/scrubbed exec + zeroize AES-256-GCM Vault)"]
+  end
+
+  CLI --> WAL
+  PWA --> WAL
+  TG --> SafeAgents
+  WAL --> Budget
+  WAL --> TurnLock
+  WAL --> Lead
+  Lead --> Specialists
+  Specialists --> Verifier
+  Meta --> WAL
+  Specialists --> Jev
+  Jev --> SafeAgents
+  SafeAgents --> RustGuard
+```
+
+---
+
+## Architecture & Core Source Map
+
+Every subsystem below is self-contained, strictly typed, and covered by offline `--faux` tests and native Rust `#[cfg(test)]` suites. Deep technical design notes live in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) and [`SECURITY.md`](./SECURITY.md).
+
+| Layer | Core Modules | Key Primitives & Invariants |
+| :--- | :--- | :--- |
+| **Rust Security Boundary** | [`crates/don-guard/src/main.rs`](./crates/don-guard/src/main.rs)<br>[`crates/don-guard/src/ssrf.rs`](./crates/don-guard/src/ssrf.rs)<br>[`crates/don-guard/src/vault.rs`](./crates/don-guard/src/vault.rs)<br>[`crates/don-guard/src/sandbox.rs`](./crates/don-guard/src/sandbox.rs) | Native `don-guard` IPC worker: `Zeroizing` AES-256-GCM Blind Vault, Luhn PAN refusal, Tailscale/NAT64/metadata SSRF blocking, `bwrap` / scrubbed `env_clear()` execution, `[REDACTED:VAULT]` masking |
+| **Durable WAL Spine** | [`packages/spine/src/runtime.ts`](./packages/spine/src/runtime.ts)<br>[`packages/spine/src/events.ts`](./packages/spine/src/events.ts)<br>[`packages/spine/src/replay.ts`](./packages/spine/src/replay.ts)<br>[`packages/spine/src/rollback.ts`](./packages/spine/src/rollback.ts)<br>[`packages/spine/src/credentials.ts`](./packages/spine/src/credentials.ts) | `@earendil-works/pi-durable` + `node:sqlite` WAL, `once()` idempotent memos + `InterruptedToolMessage`, time-travel step fork, HMAC-SHA256 rollbacks, encrypted `VaultCredentialStore` |
+| **4-Layer Trust & Jev** | [`packages/trust/src/jev-client.ts`](./packages/trust/src/jev-client.ts)<br>[`packages/trust/src/trust-jev.ts`](./packages/trust/src/trust-jev.ts)<br>[`packages/trust/src/skill-evaluator.ts`](./packages/trust/src/skill-evaluator.ts)<br>[`packages/trust/src/vault.ts`](./packages/trust/src/vault.ts) | Live Jev (`typesafe`/`openrouter`/`openai`) + 45-feature GBDT ensemble, 24h Shadow Mode, canonical payload hashing, 6-harness SkillEvaluator (`Unicode` smuggling + PII + static checks) |
+| **Worktree Team** | [`packages/team/src/orchestrator.ts`](./packages/team/src/orchestrator.ts)<br>[`packages/team/src/verifier.ts`](./packages/team/src/verifier.ts)<br>[`packages/team/src/worktree.ts`](./packages/team/src/worktree.ts) | Lead (`canWriteCode=false`) + 4 Specialists, 3-round `@mention` rooms, serialized `WriterLease`, `oxc.rs` code gate, Top-Down Verifier + dead-letter cooldown |
+| **Meta-Factory Fleet** | [`packages/meta/src/roles.ts`](./packages/meta/src/roles.ts)<br>[`packages/meta/src/templates.ts`](./packages/meta/src/templates.ts)<br>[`packages/meta/src/mailbox.ts`](./packages/meta/src/mailbox.ts)<br>[`packages/meta/src/workflows.ts`](./packages/meta/src/workflows.ts) | Liquid Boundary immutability, SkillEvaluator-gated backports, target-bound single-use `DecisionCard` enforcement, Jev mailbox, rollback-safe child factory upgrades |
+| **A2UI & Channels** | [`packages/ui/src/a2ui.ts`](./packages/ui/src/a2ui.ts)<br>[`packages/ui/src/macros.ts`](./packages/ui/src/macros.ts)<br>[`packages/ui/src/cdp-stream.ts`](./packages/ui/src/cdp-stream.ts)<br>[`packages/channels/src/firewall.ts`](./packages/channels/src/firewall.ts) | Strict `don.catalog.v1` validator, `$0.00`-LLM macro hydration + SSE patch streaming, headless Chromium CDP screencast + `handbackAt`, two-zone Telegram firewall |
+
+---
+
+## Verified Engineering Claims & Reproducible Proofs
+
+| Capability | Implementing Code | Proving Chaos / Unit Test | Reproducible Command (`$0.00`) |
+| :--- | :--- | :--- | :--- |
+| **SIGKILL `once()` Replay** | [`packages/spine/src/events.ts`](./packages/spine/src/events.ts) · [`replay.test.ts`](./packages/spine/src/replay.test.ts) | [`01-sigkill-replay.test.ts`](./tests/chaos/01-sigkill-replay.test.ts) | `bun run test:crash` |
+| **30% Forced `self_compact`** | [`packages/spine/src/compact.ts`](./packages/spine/src/compact.ts) | [`02-forced-compaction.test.ts`](./tests/chaos/02-forced-compaction.test.ts) | `bun test tests/chaos/02-forced-compaction.test.ts` |
+| **SSRF, Prompt Escaping & Sandbox** | [`packages/trust/src/ssrf.ts`](./packages/trust/src/ssrf.ts) · [`ssrf.test.ts`](./packages/trust/src/ssrf.test.ts) | [`03-prompt-injection-safeagents.test.ts`](./tests/chaos/03-prompt-injection-safeagents.test.ts) | `bun test tests/chaos/03-prompt-injection-safeagents.test.ts` |
+| **Worktrees, `WriterLease` & `oxc.rs`** | [`packages/team/src/worktree.ts`](./packages/team/src/worktree.ts) · [`code-gate.ts`](./packages/team/src/code-gate.ts) | [`04-worktree-merge-lease.test.ts`](./tests/chaos/04-worktree-merge-lease.test.ts) | `bun test tests/chaos/04-worktree-merge-lease.test.ts` |
+| **Spend Downshift & Breakers** | [`packages/spine/src/budget.ts`](./packages/spine/src/budget.ts) · [`budget.test.ts`](./packages/spine/src/budget.test.ts) | [`05-budget-circuit-breaker.test.ts`](./tests/chaos/05-budget-circuit-breaker.test.ts) | `bun test tests/chaos/05-budget-circuit-breaker.test.ts` |
+| **6-Harness SkillEvaluator Gate** | [`packages/trust/src/skill-evaluator.ts`](./packages/trust/src/skill-evaluator.ts) | [`06-skill-evaluator-gate.test.ts`](./tests/chaos/06-skill-evaluator-gate.test.ts) | `bun test tests/chaos/06-skill-evaluator-gate.test.ts` |
+| **Debate Rooms & Top-Down Verifier** | [`packages/team/src/verifier.ts`](./packages/team/src/verifier.ts) · [`verifier.test.ts`](./packages/team/src/verifier.test.ts) | [`07-slice02-verifier-replay.test.ts`](./tests/chaos/07-slice02-verifier-replay.test.ts) | `bun test tests/chaos/07-slice02-verifier-replay.test.ts` |
+| **Rust `don-guard` & Blind Vault** | [`crates/don-guard/src/main.rs`](./crates/don-guard/src/main.rs) · [`don-guard.ts`](./packages/trust/src/don-guard.ts) | [`08-slice03-don-guard-jev-vault.test.ts`](./tests/chaos/08-slice03-don-guard-jev-vault.test.ts) | `cargo test --manifest-path crates/don-guard/Cargo.toml` |
+| **Telegram "Me" Mode Firewall** | [`packages/channels/src/firewall.ts`](./packages/channels/src/firewall.ts) | [`09-slice04-telegram-firewall.test.ts`](./tests/chaos/09-slice04-telegram-firewall.test.ts) | `bun test tests/chaos/09-slice04-telegram-firewall.test.ts` |
+| **A2UI `v1.0` Cockpit & CDP** | [`packages/ui/src/a2ui.ts`](./packages/ui/src/a2ui.ts) · [`a2ui.test.ts`](./packages/ui/src/a2ui.test.ts) | [`10-slice05-a2ui-cockpit.test.ts`](./tests/chaos/10-slice05-a2ui-cockpit.test.ts) | `bun test tests/chaos/10-slice05-a2ui-cockpit.test.ts` |
+| **45-Feature GBDT System-One Jev** | [`packages/trust/src/jev-client.ts`](./packages/trust/src/jev-client.ts) · [`jev-client.test.ts`](./packages/trust/src/jev-client.test.ts) | [`11-jev-system-one-agents.test.ts`](./tests/chaos/11-jev-system-one-agents.test.ts) | `bun test tests/chaos/11-jev-system-one-agents.test.ts` |
+| **OAuth Vault & Cockpit Pairing** | [`packages/spine/src/credentials.ts`](./packages/spine/src/credentials.ts) · [`onboard.ts`](./packages/cli/src/onboard.ts) | [`12-onboarding-oauth-vault.test.ts`](./tests/chaos/12-onboarding-oauth-vault.test.ts) | `bun test tests/chaos/12-onboarding-oauth-vault.test.ts` |
+| **Meta-Factory Fleet & Mailbox** | [`packages/meta/src/roles.ts`](./packages/meta/src/roles.ts) · [`mailbox.test.ts`](./packages/meta/src/mailbox.test.ts) | [`13-slice06-meta-factory.test.ts`](./tests/chaos/13-slice06-meta-factory.test.ts) | `bun test tests/chaos/13-slice06-meta-factory.test.ts` |
 
 ---
 
@@ -10,19 +118,26 @@ A single-box, local-first autonomous software factory powered by `@earendil-work
 
 **Requirements:**
 - [Bun](https://bun.sh) `>= 1.4`
+- Rust toolchain (`cargo`, `rustc` stable) for [`crates/don-guard`](./crates/don-guard/Cargo.toml)
 - `git`
-- Optional on Linux: `bubblewrap` (`bwrap`) for kernel filesystem isolation
+- Optional on Linux: `bubblewrap` (`bwrap`) for namespace filesystem isolation
 - Optional firewall sidecar: Hugging Face `safeagents` (`don guard install`)
 
 ```bash
 git clone https://github.com/aegntic/don-bot.git don-bot
 cd don-bot
+
+# Build & verify the native Rust security boundary
+cargo test --manifest-path crates/don-guard/Cargo.toml
+cargo build --release --manifest-path crates/don-guard/Cargo.toml
+
+# Install dependencies & run the full CI gate (typecheck + oxlint + oxfmt + 69 Bun tests + SIGKILL crash proof)
 bun install
 bun run check
 bun run test:crash
 ```
 
-`bun run test:crash` spends **$0.00**: it launches a real worker subprocess in `--faux` mode, sends `SIGKILL` mid-execution, restarts against the same SQLite WAL database, proves completed `once()` steps ran **exactly once**, and injects `InterruptedToolMessage` for unsafe interrupted steps.
+`bun run test:crash` spends **$0.00**: it launches [`tests/chaos/fixtures/sigkill-worker.ts`](./tests/chaos/fixtures/sigkill-worker.ts) in `--faux` mode, sends `SIGKILL` mid-execution, restarts against the same SQLite WAL database, proves completed `once()` steps ran **exactly once**, and injects `InterruptedToolMessage` for unsafe interrupted steps.
 
 ---
 
@@ -72,55 +187,22 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 
 ---
 
-## `safeagents` Guard Setup
-
-New `.don/config.yaml` files start in `log-only` mode so initial onboarding never breaks local exploration. Switch to active interception when ready:
+## Security & SkillEvaluator Quick Commands
 
 ```bash
+# safeagents sidecar (starts in log-only mode by default)
 bun run don guard install
 bun run don guard status
+bun run don guard rust-status
+bun run don guard jev-status
 bun run don guard block --dir /path/to/your-repo
-```
 
----
-
-## Core `NVIDIA/SkillEvaluator` Gate Setup
-
-Don-Bot runs a built-in zero-dependency Tier 1 static, security, PII, Unicode smuggling, and 6-harness evaluator out of the box, and automatically upgrades to the full Python [`NVIDIA/SkillEvaluator`](https://github.com/NVIDIA/SkillEvaluator) CLI (Tier 1/2/3 + Harbor) when installed:
-
-```bash
+# NVIDIA SkillEvaluator (built-in Tier 1 + 6-harness checks; auto-upgrades if Python CLI installed)
 bun run don skills install
 bun run don skills status --dir /path/to/your-repo
 bun run don skills eval --dir /path/to/your-repo
 bun run don skills harness --dir /path/to/your-repo
 ```
-
----
-
-## OS Notes
-
-- **Linux:** `SandboxPort` uses `bwrap` (`bubblewrap`) when available and automatically strips `*_API_KEY`, `*_TOKEN`, and `DON_ACCESS_KEY` from child environments.
-- **macOS & Windows:** Uses isolated worktrees (`createSpecialistWorktree`, Windows directory junctions via `node:fs` where supported), stripped child environments, `node:sqlite` WAL storage, and `node:path` separators throughout.
-
----
-
-## CI Chaos Tests (`--faux`, Zero Live API Keys)
-
-| Test File | What It Proves |
-| :--- | :--- |
-| `tests/chaos/01-sigkill-replay.test.ts` | Real child-process `SIGKILL` recovery via SQLite WAL + `once()` |
-| `tests/chaos/02-forced-compaction.test.ts` | `>=30%` forced `self_compact` tool-lock + `note_to_self` handoff |
-| `tests/chaos/03-prompt-injection-safeagents.test.ts` | `<untrusted_tool_result>` escaping, `safeagents` blocks, SSRF & `.env` guards |
-| `tests/chaos/04-worktree-merge-lease.test.ts` | Parallel worktrees, serialized writer lease, `oxc.rs` code gate, `@mention` rooms & cooldown |
-| `tests/chaos/05-budget-circuit-breaker.test.ts` | `70%` fast-tier downshift + `$2.00` task / `$0.25` subagent circuit breakers |
-| `tests/chaos/06-skill-evaluator-gate.test.ts` | Core SkillEvaluator Tier 1 + 6-harness checks, Decision Deck escalation, push guard & CLI contract |
-| `tests/chaos/07-slice02-verifier-replay.test.ts` | Complexity-gated 3-round debate rooms, Top-Down Verifier loop, subagent guards & step replay fork |
-| `tests/chaos/08-slice03-don-guard-jev-vault.test.ts` | Compiled Rust `don-guard` binary, Blind Vault `AES-256-GCM`, `trust-jev` Shadow Mode & signed rollbacks |
-| `tests/chaos/09-slice04-telegram-firewall.test.ts` | `@mtcute/bun` native SQLite, two-zone outbound firewall, `EXCLUSIONS.txt`, Inline Buttons & STT routing |
-| `tests/chaos/10-slice05-a2ui-cockpit.test.ts` | A2UI `v1.0` `don.catalog.v1`, TS Macro Expander, `.don/access-key` SSE, Preview CSP & headless Chromium CDP |
-| `tests/chaos/11-jev-system-one-agents.test.ts` | Live Jev wire protocol (`typesafe`/`openrouter`/`openai`), 45-feature GBDT ensemble, and 5 factory Jev gates |
-| `tests/chaos/12-onboarding-oauth-vault.test.ts` | Encrypted `VaultCredentialStore`, 1-login OpenRouter OAuth (+ auto-Jev), single-use Cockpit pairing codes & CLI auth lifecycle |
-| `tests/chaos/13-slice06-meta-factory.test.ts` | Meta-Factory template cloning, Liquid Boundary, SkillEvaluator backport gate, 3-state fleet lifecycle, Jev mailbox & heartbeat |
 
 ---
 
@@ -133,13 +215,24 @@ bun run don skills harness --dir /path/to/your-repo
 | **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`main`)** |
 | **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`main`)** |
 | **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`main`)** |
-| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`main`)** |
+| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`v0.6.0-rc.1` · `main`)** |
+
+<details>
+<summary>Don-Bot Architecture Visual Overview</summary>
+
+![Don-Bot — Architecture & Factory Evolution](assets/don-bot-evolution-hero.jpg)
+
+</details>
 
 ---
 
-## References & Attribution
+## Documentation, Governance & Attribution
 
-- Architecture & Invariants: [SPEC.md](./SPEC.md)
-- Configuration Template: [don.config.example.yaml](./don.config.example.yaml)
-- Apache-2.0 License & Port Attribution: [LICENSE](./LICENSE) · [NOTICE](./NOTICE)
+- Deep Architecture Reference: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- Specification & Invariants: [`SPEC.md`](./SPEC.md)
+- Security Policy & Threat Model: [`SECURITY.md`](./SECURITY.md)
+- Contributor Guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Configuration Template: [`don.config.example.yaml`](./don.config.example.yaml)
+- CI Workflow: [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
+- Apache-2.0 License & Port Attribution: [`LICENSE`](./LICENSE) · [`NOTICE`](./NOTICE)
 - Legacy `n8n-io/nod` Fork Reference: Archived intact on git branch `legacy/nod-reference`
