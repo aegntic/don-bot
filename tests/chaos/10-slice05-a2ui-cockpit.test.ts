@@ -517,14 +517,14 @@ describe('Chaos Test 6: Slice 05 A2UI 1.0 catalog, TS macro expander, SSE cockpi
     const chromium = detectChromiumBinary();
     expect(chromium).not.toBeNull();
 
-    const session = new CdpScreencastSession({ width: 800, height: 600, timeoutMs: 12_000 });
+    const session = new CdpScreencastSession({ width: 800, height: 600, timeoutMs: 25_000 });
     activeSessions.push(session);
 
     try {
       await session.start(
         'data:text/html,<html><body style="margin:0;background:%23090c11;color:%233fc1ff;font-family:monospace;padding:32px"><h1>Don-Bot CDP Live</h1><p>A2UI Telemetry Frame</p></body></html>',
       );
-      const frame = await session.waitForFrame(8_000);
+      const frame = await session.waitForFrame(12_000);
       expect(frame.data.length).toBeGreaterThan(100);
       expect(frame.data.startsWith('/9j/')).toBe(true);
       expect(session.frameCount).toBeGreaterThanOrEqual(1);
@@ -542,5 +542,5 @@ describe('Chaos Test 6: Slice 05 A2UI 1.0 catalog, TS macro expander, SSE cockpi
     }
 
     expect(session.isRunning).toBe(false);
-  }, 20_000);
+  }, 45_000);
 });

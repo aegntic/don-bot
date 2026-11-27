@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -58,6 +58,31 @@ export function detectChromiumBinary(): string | null {
   return null;
 }
 
+/**
+ * Parse the Chromium DevTools WebSocket port from stderr logs.
+ */
+export function parseDevToolsPortFromStderr(stderr: string): number | null {
+  const match = /DevTools listening on ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)\//.exec(
+    stderr,
+  );
+  if (!match?.[1]) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+/**
+ * Parse the Chromium DevTools listening port from a `DevToolsActivePort` file.
+ */
+export function parseDevToolsActivePortFile(contents: string): number | null {
+  const firstLine = contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine || !/^\d+$/.test(firstLine)) return null;
+  const port = Number(firstLine);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 async function fetchPageWebSocketUrl(port: number, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   const listUrl = `http://127.0.0.1:${port}/json/list`;
@@ -109,7 +134,7 @@ export class CdpScreencastSession {
     this.binaryPath = options.binaryPath ?? detectChromiumBinary();
     this.width = options.width ?? 1280;
     this.height = options.height ?? 800;
-    this.timeoutMs = options.timeoutMs ?? 12_000;
+    this.timeoutMs = options.timeoutMs ?? 25_000;
   }
 
   get frameCount(): number {
@@ -157,22 +182,43 @@ export class CdpScreencastSession {
     }
 
     this.userDataDir = mkdtempSync(join(tmpdir(), 'don-cdp-'));
+    const activePortPath = join(this.userDataDir, 'DevToolsActivePort');
     const args = [
       '--headless=new',
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-extensions',
+      '--disable-sync',
+      '--disable-default-apps',
+      '--disable-component-update',
+      '--disable-breakpad',
+      '--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider',
+      '--password-store=basic',
+      '--use-mock-keychain',
+      '--mute-audio',
       '--no-first-run',
       '--no-default-browser-check',
+      '--no-service-autorun',
       `--user-data-dir=${this.userDataDir}`,
+      '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=0',
       `--window-size=${this.width},${this.height}`,
       'about:blank',
     ];
 
+    const childEnv: NodeJS.ProcessEnv = { ...process.env };
+    const dbusAddr = childEnv.DBUS_SESSION_BUS_ADDRESS?.trim();
+    if (dbusAddr !== undefined && !dbusAddr.startsWith('unix:') && !dbusAddr.startsWith('tcp:')) {
+      delete childEnv.DBUS_SESSION_BUS_ADDRESS;
+    }
+
     const child = spawn(this.binaryPath, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: childEnv,
     });
     this.child = child;
     this.framesReceived = 0;
@@ -182,34 +228,64 @@ export class CdpScreencastSession {
       const devToolsPort = await new Promise<number>((resolvePort, rejectPort) => {
         let stderrBuf = '';
         let settled = false;
-        const timer = setTimeout(() => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let portPoll: ReturnType<typeof setInterval> | null = null;
+
+        const cleanup = () => {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          if (portPoll !== null) {
+            clearInterval(portPoll);
+            portPoll = null;
+          }
+        };
+
+        const resolveOnce = (port: number) => {
           if (settled) return;
           settled = true;
-          rejectPort(new Error(`Chromium DevTools port timed out (${stderrBuf.trim()})`));
+          cleanup();
+          resolvePort(port);
+        };
+
+        const rejectOnce = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          rejectPort(err);
+        };
+
+        timer = setTimeout(() => {
+          rejectOnce(new Error(`Chromium DevTools port timed out (${stderrBuf.trim()})`));
         }, this.timeoutMs);
+
+        portPoll = setInterval(() => {
+          if (settled || !existsSync(activePortPath)) return;
+          try {
+            const parsedPort = parseDevToolsActivePortFile(readFileSync(activePortPath, 'utf8'));
+            if (parsedPort !== null) {
+              resolveOnce(parsedPort);
+            }
+          } catch {
+            // File may still be flushing on disk; retry on next poll tick.
+          }
+        }, 100);
 
         child.stderr?.on('data', (chunk: Buffer) => {
           stderrBuf += chunk.toString('utf8');
-          const match = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(stderrBuf);
-          if (match && !settled) {
-            settled = true;
-            clearTimeout(timer);
-            resolvePort(Number(match[1]));
+          const parsedPort = parseDevToolsPortFromStderr(stderrBuf);
+          if (parsedPort !== null) {
+            resolveOnce(parsedPort);
           }
         });
 
         child.on('error', (err) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          rejectPort(err);
+          rejectOnce(err);
         });
 
         child.on('exit', (code) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          rejectPort(new Error(`Chromium exited prematurely (${String(code)}): ${stderrBuf}`));
+          rejectOnce(new Error(`Chromium exited prematurely (${String(code)}): ${stderrBuf}`));
         });
       });
 
@@ -239,7 +315,7 @@ export class CdpScreencastSession {
         everyNthFrame: 1,
       });
 
-      const loadPromise = this.waitForEvent('Page.loadEventFired', 2500);
+      const loadPromise = this.waitForEvent('Page.loadEventFired', 5000);
       await this.sendCommand('Page.navigate', { url });
       await loadPromise;
     } catch (error) {
