@@ -135,6 +135,7 @@ function renderHelp(): string {
     '  --verify                         Run oxc code gate (oxlint/oxfmt/typecheck/tests) after completion',
     '  --provider <id>                  Provider ID for auth set/logout (openrouter|anthropic|openai|google|typesafe)',
     '  --key <secret>                   API key for auth set (never printed back; prompts masked if omitted in TTY)',
+    '  --key-stdin                      Read API key from stdin without exposing it in process arguments',
     '  --non-interactive                Run onboard without interactive terminal prompts',
     '  --template <id>                  Template ID for factory spawn',
     '  --mission <text>                 Operational mission for factory hire',
@@ -234,6 +235,7 @@ export async function runCli(
       verify: { type: 'boolean', default: false },
       provider: { type: 'string' },
       key: { type: 'string' },
+      'key-stdin': { type: 'boolean', default: false },
       'non-interactive': { type: 'boolean', default: false },
       template: { type: 'string' },
       mission: { type: 'string' },
@@ -375,11 +377,14 @@ export async function runCli(
       }
 
       let secret = typeof parsed.values.key === 'string' ? parsed.values.key.trim() : '';
+      if (!secret && parsed.values['key-stdin']) {
+        secret = (await new Response(Bun.stdin.stream()).text()).trim();
+      }
       if (!secret && process.stdin.isTTY && process.stdout.isTTY) {
         secret = await promptMaskedSecret(`Paste ${providerId} API key (masked): `);
       }
       if (!secret) {
-        writeLine(errOut, 'Missing non-empty --key secret for "don auth set".');
+        writeLine(errOut, 'Missing non-empty --key or --key-stdin secret for "don auth set".');
         return 2;
       }
 
@@ -568,7 +573,7 @@ export async function runCli(
       `  budget:     taskUsd=$${result.budget.taskUsd.toFixed(4)} status=${result.budget.status}`,
       ...(result.codeGate
         ? [
-            `  codeGate:   ${result.codeGate.passed ? 'passed' : `failed (${result.codeGate.failedStage ?? 'unknown'})`}`,
+            `  codeGate:   ${result.codeGate.passed ? 'passed' : `failed (${result.codeGate.failedStage ?? 'unknown'})`}${result.verifierAttempts !== undefined ? ` (attempts=${result.verifierAttempts})` : ''}`,
           ]
         : []),
       ...(result.skillGate ? [`  skillGate:  ${result.skillGate.summary}`] : []),
@@ -690,17 +695,36 @@ export async function runCli(
 
     if (action === 'jev-status') {
       const config = loadDonConfig(dir);
+      let vaultKeys: { typesafe?: string; openrouter?: string; openai?: string } = {};
+      if (!useFaux && existsSync(dbPath)) {
+        const db = openDonDb(dbPath);
+        try {
+          const store = new VaultCredentialStore({ db: db.raw, donDir });
+          vaultKeys = await store.resolveJevApiKeys();
+        } finally {
+          db.close();
+        }
+      }
+      const mergedEnv: NodeJS.ProcessEnv = {
+        ...(vaultKeys.typesafe ? { TYPESAFE_API_KEY: vaultKeys.typesafe } : {}),
+        ...(vaultKeys.openrouter ? { OPENROUTER_API_KEY: vaultKeys.openrouter } : {}),
+        ...(vaultKeys.openai ? { OPENAI_API_KEY: vaultKeys.openai } : {}),
+        ...process.env,
+      };
       const conn = resolveJevConnection({
+        env: mergedEnv,
         provider: config.jev.provider,
         model: config.jev.model,
         faux: useFaux,
       });
+      const source = conn ? (conn.apiKeyEnv ?? 'vault') : 'unset';
       const payload = {
         enabled: config.jev.enabled,
         provider: config.jev.provider,
         resolvedProvider: conn?.provider ?? null,
         model: conn?.model ?? config.jev.model,
         apiKeyEnv: conn?.apiKeyEnv ?? null,
+        source,
         configured: Boolean(conn),
         gbdtFeatures: JEV_MODEL_FEATURES.length,
         gbdtThreshold: JEV_MODEL_THRESHOLD,
@@ -721,7 +745,7 @@ export async function runCli(
         [
           'Jev System-One decision layer status',
           `  enabled:    ${payload.enabled}`,
-          `  configured: ${payload.configured} (provider=${payload.resolvedProvider ?? 'none'}, model=${payload.model}, env=${payload.apiKeyEnv ?? 'unset'})`,
+          `  configured: ${payload.configured} (provider=${payload.resolvedProvider ?? 'none'}, model=${payload.model}, source=${payload.source})`,
           `  gbdt:       ${payload.gbdtFeatures} features (threshold=${payload.gbdtThreshold.toFixed(4)})`,
           `  gates:      tools=${payload.gates.gateTools} complexity=${payload.gates.routeComplexity} verify=${payload.gates.verifyStop} memory=${payload.gates.filterMemory} outbound=${payload.gates.gateOutbound}`,
         ],

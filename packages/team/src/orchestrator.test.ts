@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCodingTools, createReadTool, defineExtension, openDonSpine } from '@don-bot/spine';
+import {
+  createCodingTools,
+  createReadTool,
+  defineExtension,
+  openDonDb,
+  openDonSpine,
+} from '@don-bot/spine';
 import { runCodeGate } from './code-gate.ts';
 import { runTeamGoal } from './orchestrator.ts';
 
@@ -152,6 +158,94 @@ describe('packages/team/src/orchestrator', () => {
       verifyCodeGate: true,
     });
     expect(teamRes.status).toBe('done');
+    expect(teamRes.verifierAttempts).toBe(1);
     expect(teamRes.codeGate?.passed).toBe(true);
+  });
+
+  test('isolates consecutive runTeamGoal invocations into separate conversations per task', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'don-orch-multi-'));
+    tempDirs.push(workDir);
+
+    const first = await runTeamGoal({
+      dir: workDir,
+      goal: 'First backend task',
+      faux: true,
+      role: 'api-keeper',
+    });
+    expect(first.status).toBe('done');
+    expect(first.activeRole).toBe('api-keeper');
+
+    const second = await runTeamGoal({
+      dir: workDir,
+      goal: 'Second pipeline task',
+      faux: true,
+      role: 'pipeline-forge',
+    });
+    expect(second.status).toBe('done');
+    expect(second.activeRole).toBe('pipeline-forge');
+    expect(second.assistantOutput).toContain('Second pipeline task');
+
+    const db = openDonDb(join(workDir, '.don', 'factory.sqlite'));
+    try {
+      const row = db.raw.prepare('SELECT COUNT(*) as cnt FROM pi_conversations').get() as {
+        cnt: number;
+      };
+      expect(row.cnt).toBeGreaterThanOrEqual(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('symlinks workspace package node_modules directories into specialist git worktrees', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'don-orch-ws-nm-'));
+    tempDirs.push(repoDir);
+    initGitRepo(repoDir);
+
+    mkdirSync(join(repoDir, 'packages', 'spine', 'node_modules', 'demo-pkg'), { recursive: true });
+    writeFileSync(join(repoDir, 'packages', 'spine', 'index.ts'), 'export const x = 1;\n', 'utf8');
+    mkdirSync(join(repoDir, 'crates', 'don-guard', 'target', 'release'), { recursive: true });
+    writeFileSync(
+      join(repoDir, 'crates', 'don-guard', 'Cargo.toml'),
+      '[package]\nname="don-guard"\n',
+      'utf8',
+    );
+
+    const res = spawnSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'add',
+        'packages/spine/index.ts',
+        'crates/don-guard/Cargo.toml',
+      ],
+      {
+        cwd: repoDir,
+        encoding: 'utf8',
+      },
+    );
+    if (res.status !== 0) throw new Error(res.stderr);
+    const commitRes = spawnSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '-m', 'add spine pkg and crate'],
+      { cwd: repoDir, encoding: 'utf8' },
+    );
+    if (commitRes.status !== 0) throw new Error(commitRes.stderr);
+
+    const wtRes = await runTeamGoal({
+      dir: repoDir,
+      goal: 'Check workspace dependency symlink',
+      faux: true,
+      role: 'api-keeper',
+      worktree: true,
+    });
+
+    expect(wtRes.worktreePath).toBeDefined();
+    const linkedPkgNm = join(wtRes.worktreePath!, 'packages', 'spine', 'node_modules');
+    expect(existsSync(linkedPkgNm)).toBe(true);
+    expect(lstatSync(linkedPkgNm).isSymbolicLink()).toBe(true);
+    const linkedCrateTarget = join(wtRes.worktreePath!, 'crates', 'don-guard', 'target');
+    expect(existsSync(linkedCrateTarget)).toBe(true);
+    expect(lstatSync(linkedCrateTarget).isSymbolicLink()).toBe(true);
   });
 });

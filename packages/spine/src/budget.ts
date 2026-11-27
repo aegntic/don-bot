@@ -313,3 +313,11 @@ export function enforceBudget(
     reason: snapshot.reason,
   };
 }
+
+export function formatBudgetSummary(snapshot: BudgetSnapshot): string {
+  let result = `subagent=$${snapshot.subagentUsd.toFixed(2)} task=$${snapshot.taskUsd.toFixed(2)} daily=$${snapshot.dailyUsd.toFixed(2)} status=${snapshot.status}`;
+  if (snapshot.tierOverride) {
+    result += ` tier=${snapshot.tierOverride}`;
+  }
+  return result;
+}

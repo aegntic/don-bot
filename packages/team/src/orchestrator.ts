@@ -79,6 +79,7 @@ export interface RunTeamGoalResult {
   readonly worktreePath?: string;
   readonly worktreeBranch?: string;
   readonly budget: BudgetSnapshot;
+  readonly verifierAttempts?: number;
   readonly codeGate?: CodeGateEnvelope;
   readonly skillGate?: SkillGateEnvelope;
 }
@@ -251,6 +252,8 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   let errorReason: string | undefined;
   let summary = '';
   let budgetSnapshot: BudgetSnapshot;
+  let verifierAttempts: number | undefined;
+  let codeGate: CodeGateEnvelope | undefined;
   let skillGate: SkillGateEnvelope | undefined;
 
   try {
@@ -322,15 +325,19 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
       ]);
     }
 
-    const conv = await spine.harness.root(BACKGROUND_CONTEXT, {
-      agent: {
-        model: {
-          provider: model.provider,
-          modelId: model.modelId,
+    const conv = await spine.harness.createConversation(
+      {
+        ownership: { kind: 'ownerless' },
+        agent: {
+          model: {
+            provider: model.provider,
+            modelId: model.modelId,
+          },
+          instructions: staticPrefix,
         },
-        instructions: staticPrefix,
       },
-    });
+      BACKGROUND_CONTEXT,
+    );
     const convId = Number(conv.id);
     spine.setTaskContext(convId, {
       taskId,
@@ -390,15 +397,51 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
       }
     }
 
+    if (options.verifyCodeGate && settledStatus === 'done') {
+      const maxGateAttempts =
+        useFaux || !activeProfile.canWriteCode ? 1 : Math.max(1, config.team.maxVerifierLoops);
+      for (let attempt = 1; attempt <= maxGateAttempts; attempt++) {
+        verifierAttempts = attempt;
+        codeGate = await runCodeGate({ cwd: executionCwd });
+        if (codeGate.passed || attempt >= maxGateAttempts) {
+          break;
+        }
+        const repairSubmission = await conv.submit(
+          {
+            type: 'input',
+            content: [
+              `Code gate failed on attempt ${attempt}/${maxGateAttempts} at stage "${codeGate.failedStage ?? 'unknown'}".`,
+              'Fix the exact issue below in your worktree and keep edits minimal and cleanly formatted:',
+              ...(codeGate.failedStage === 'format'
+                ? [
+                    'For format failures, run "./node_modules/.bin/oxfmt <modified-files>" (or "bun run fmt") via bash instead of hand-editing quotes or indentation.',
+                  ]
+                : []),
+              codeGate.summary.slice(0, 4000),
+            ].join('\n\n'),
+          },
+          BACKGROUND_CONTEXT,
+        );
+        const repairSettled = await repairSubmission.wait(BACKGROUND_CONTEXT);
+        settledStatus = repairSettled.status;
+        if (repairSettled.status !== 'done') {
+          if (repairSettled.status === 'unanswered') {
+            const reasonParts = [
+              repairSettled.reason,
+              repairSettled.detail !== undefined ? JSON.stringify(repairSettled.detail) : '',
+            ].filter((part) => part.length > 0);
+            errorReason = reasonParts.join(': ');
+          }
+          summary = `Goal ${taskId} ended during code-gate repair with status=${repairSettled.status}${errorReason ? ` (${errorReason})` : ''}`;
+          break;
+        }
+      }
+    }
+
     updateTurnStatus(spine.db, turnId, settledStatus === 'done' ? 'done' : 'aborted');
     budgetSnapshot = spine.getBudgetForConversation(convId);
   } finally {
     await spine.close();
-  }
-
-  let codeGate: CodeGateEnvelope | undefined;
-  if (options.verifyCodeGate && settledStatus === 'done') {
-    codeGate = await runCodeGate({ cwd: executionCwd });
   }
 
   return {
@@ -419,6 +462,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
       ? { worktreePath: createdWorktree.path, worktreeBranch: createdWorktree.branch }
       : {}),
     budget: budgetSnapshot,
+    ...(verifierAttempts !== undefined ? { verifierAttempts } : {}),
     codeGate,
     skillGate,
   };

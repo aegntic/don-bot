@@ -24,9 +24,9 @@
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 2                  │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   6 WORKSPACES  │   1 RUST CRATE  │    84 TESTS     │   $0.00 FAUX VERIFIED   │
-│  spine · trust  │    don-guard    │  75 Bun + 9 RS  │    13 Chaos Proofs +    │
-│  team · ui · …  │ AES-GCM · bwrap │  799 Expects    │   10 Co-located Suites  │
+│   6 WORKSPACES  │   1 RUST CRATE  │    87 TESTS     │   $0.00 FAUX VERIFIED   │
+│  spine · trust  │    don-guard    │  78 Bun + 9 RS  │    13 Chaos Proofs +    │
+│  team · ui · …  │ AES-GCM · bwrap │  813 Expects    │   10 Co-located Suites  │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────────────┘
 ```
 

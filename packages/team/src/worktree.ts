@@ -98,17 +98,52 @@ function getCurrentBranch(repoDir: string): string {
   return branch === 'HEAD' ? 'main' : branch;
 }
 
-function linkSharedDependencies(repoDir: string, worktreePath: string): void {
-  const sourceNodeModules = join(repoDir, 'node_modules');
-  const targetNodeModules = join(worktreePath, 'node_modules');
-  if (!existsSync(sourceNodeModules) || existsSync(targetNodeModules)) {
+function symlinkIfMissing(sourcePath: string, targetPath: string): void {
+  if (!existsSync(sourcePath) || existsSync(targetPath)) {
     return;
   }
   try {
     const linkType = process.platform === 'win32' ? 'junction' : 'dir';
-    symlinkSync(sourceNodeModules, targetNodeModules, linkType);
+    symlinkSync(sourcePath, targetPath, linkType);
   } catch {
     // Non-fatal: worktree remains usable without shared node_modules symlink.
+  }
+}
+
+function linkSharedDependencies(repoDir: string, worktreePath: string): void {
+  symlinkIfMissing(join(repoDir, 'node_modules'), join(worktreePath, 'node_modules'));
+
+  for (const group of ['packages', 'apps']) {
+    const repoGroupDir = join(repoDir, group);
+    const wtGroupDir = join(worktreePath, group);
+    if (!existsSync(repoGroupDir) || !existsSync(wtGroupDir)) continue;
+    try {
+      for (const entry of readdirSync(repoGroupDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const srcNm = join(repoGroupDir, entry.name, 'node_modules');
+        const dstPkgDir = join(wtGroupDir, entry.name);
+        if (!existsSync(srcNm) || !existsSync(dstPkgDir)) continue;
+        symlinkIfMissing(srcNm, join(dstPkgDir, 'node_modules'));
+      }
+    } catch {
+      // Non-fatal: continue even if a workspace subdir cannot be scanned.
+    }
+  }
+
+  const repoCratesDir = join(repoDir, 'crates');
+  const wtCratesDir = join(worktreePath, 'crates');
+  if (existsSync(repoCratesDir) && existsSync(wtCratesDir)) {
+    try {
+      for (const entry of readdirSync(repoCratesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const srcTarget = join(repoCratesDir, entry.name, 'target');
+        const dstCrateDir = join(wtCratesDir, entry.name);
+        if (!existsSync(srcTarget) || !existsSync(dstCrateDir)) continue;
+        symlinkIfMissing(srcTarget, join(dstCrateDir, 'target'));
+      }
+    } catch {
+      // Non-fatal: continue even if crates dir cannot be scanned.
+    }
   }
 }
 

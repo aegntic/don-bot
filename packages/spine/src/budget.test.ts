@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { enforceBudget, getBudgetSnapshot, recordUsage } from './budget.ts';
+import { enforceBudget, formatBudgetSummary, getBudgetSnapshot, recordUsage } from './budget.ts';
 import { DEFAULT_DON_CONFIG } from './config.ts';
 import { openDonDb } from './db.ts';
 
@@ -80,5 +80,26 @@ describe('packages/spine/src/budget', () => {
     } finally {
       db.close();
     }
+  });
+
+  test('formatBudgetSummary produces correct single-line strings', () => {
+    expect(
+      formatBudgetSummary({
+        subagentUsd: 0.1,
+        taskUsd: 0.42,
+        dailyUsd: 0.85,
+        status: 'ok',
+      }),
+    ).toBe('subagent=$0.10 task=$0.42 daily=$0.85 status=ok');
+
+    expect(
+      formatBudgetSummary({
+        subagentUsd: 0,
+        taskUsd: 1.45,
+        dailyUsd: 3.2,
+        status: 'downshift',
+        tierOverride: 'fast',
+      }),
+    ).toBe('subagent=$0.00 task=$1.45 daily=$3.20 status=downshift tier=fast');
   });
 });
