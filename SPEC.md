@@ -3,7 +3,7 @@
 **Project:** Don-Bot — On-the-Run Dark Factory (`github.com/aegntic/don-bot`)  
 **Standard:** ASD-STE100 Simplified Technical English  
 **Target OS Support:** Linux, macOS, Windows  
-**Latest Pre-Release:** `v0.6.0-rc.1` (Slices 01–06 on `main` · Baseline pre-release: `v0.1.0-slice-01`)
+**Latest Pre-Release:** `v0.6.0-rc.2` (Slices 01–06 on `main` · Baseline pre-release: `v0.1.0-slice-01`)
 
 ---
 

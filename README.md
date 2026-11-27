@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/aegntic/don-bot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aegntic/don-bot/ci.yml?branch=main&style=flat-square&color=ff5a1f&labelColor=0d1015&label=CI" alt="CI Status" /></a>
-  <a href="https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.1"><img src="https://img.shields.io/badge/pre--release-v0.6.0--rc.1-ff5a1f?style=flat-square&labelColor=0d1015" alt="Pre-Release v0.6.0-rc.1" /></a>
+  <a href="https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.2"><img src="https://img.shields.io/badge/pre--release-v0.6.0--rc.2-ff5a1f?style=flat-square&labelColor=0d1015" alt="Pre-Release v0.6.0-rc.2" /></a>
   <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4%20%C2%B7%20TypeScript-3fc1ff?style=flat-square&labelColor=0d1015&logo=bun&logoColor=white" alt="Bun and TypeScript" />
   <img src="https://img.shields.io/badge/Rust-don--guard-ff5a1f?style=flat-square&labelColor=0d1015&logo=rust&logoColor=white" alt="Rust don-guard" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-64748b?style=flat-square&labelColor=0d1015" alt="Apache-2.0 License" /></a>
@@ -22,7 +22,7 @@
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
-│                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 1                  │
+│                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 2                  │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
 │   6 WORKSPACES  │   1 RUST CRATE  │    78 TESTS     │   $0.00 FAUX VERIFIED   │
 │  spine · trust  │    don-guard    │  69 Bun + 9 RS  │    13 Chaos Proofs +    │
@@ -215,7 +215,7 @@ bun run don skills harness --dir /path/to/your-repo
 | **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`main`)** |
 | **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`main`)** |
 | **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`main`)** |
-| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`v0.6.0-rc.1` · `main`)** |
+| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`v0.6.0-rc.2` · `main`)** |
 
 <details>
 <summary>Don-Bot Architecture Visual Overview</summary>
