@@ -17,6 +17,7 @@ export interface CdpSessionOptions {
   readonly width?: number;
   readonly height?: number;
   readonly timeoutMs?: number;
+  readonly maxStartAttempts?: number;
 }
 
 export interface CdpStartOptions {
@@ -114,6 +115,7 @@ export class CdpScreencastSession {
   private readonly width: number;
   private readonly height: number;
   private readonly timeoutMs: number;
+  private readonly maxStartAttempts: number;
 
   private child: ChildProcess | null = null;
   private ws: WebSocket | null = null;
@@ -135,6 +137,7 @@ export class CdpScreencastSession {
     this.width = options.width ?? 1280;
     this.height = options.height ?? 800;
     this.timeoutMs = options.timeoutMs ?? 25_000;
+    this.maxStartAttempts = Math.max(1, options.maxStartAttempts ?? 2);
   }
 
   get frameCount(): number {
@@ -181,6 +184,26 @@ export class CdpScreencastSession {
       throw new Error('Chromium binary not found on host; cannot start CDP screencast.');
     }
 
+    for (let attempt = 1; attempt <= this.maxStartAttempts; attempt++) {
+      try {
+        await this.startOnce(url, startOptions);
+        return;
+      } catch (error) {
+        await this.stop();
+        const message = error instanceof Error ? error.message : String(error);
+        const isTransientStartup = /timed out|exited prematurely/i.test(message);
+        if (attempt >= this.maxStartAttempts || !isTransientStartup) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private async startOnce(url: string, startOptions: CdpStartOptions = {}): Promise<void> {
+    if (!this.binaryPath || !existsSync(this.binaryPath)) {
+      throw new Error('Chromium binary not found on host; cannot start CDP screencast.');
+    }
+
     this.userDataDir = mkdtempSync(join(tmpdir(), 'don-cdp-'));
     const activePortPath = join(this.userDataDir, 'DevToolsActivePort');
     const args = [
@@ -196,7 +219,9 @@ export class CdpScreencastSession {
       '--disable-default-apps',
       '--disable-component-update',
       '--disable-breakpad',
-      '--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider',
+      '--disable-crash-reporter',
+      '--no-crash-upload',
+      '--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider,AudioServiceOutOfProcess',
       '--password-store=basic',
       '--use-mock-keychain',
       '--mute-audio',
@@ -211,9 +236,11 @@ export class CdpScreencastSession {
     ];
 
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
-    const dbusAddr = childEnv.DBUS_SESSION_BUS_ADDRESS?.trim();
-    if (dbusAddr !== undefined && !dbusAddr.startsWith('unix:') && !dbusAddr.startsWith('tcp:')) {
-      delete childEnv.DBUS_SESSION_BUS_ADDRESS;
+    if (process.platform === 'linux') {
+      const dbusAddr = childEnv.DBUS_SESSION_BUS_ADDRESS?.trim() ?? '';
+      if (!dbusAddr.startsWith('unix:') && !dbusAddr.startsWith('tcp:')) {
+        childEnv.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/dev/null';
+      }
     }
 
     const child = spawn(this.binaryPath, args, {
@@ -224,104 +251,99 @@ export class CdpScreencastSession {
     this.framesReceived = 0;
     this.latestFrame = null;
 
-    try {
-      const devToolsPort = await new Promise<number>((resolvePort, rejectPort) => {
-        let stderrBuf = '';
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        let portPoll: ReturnType<typeof setInterval> | null = null;
+    const devToolsPort = await new Promise<number>((resolvePort, rejectPort) => {
+      let stderrBuf = '';
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let portPoll: ReturnType<typeof setInterval> | null = null;
 
-        const cleanup = () => {
-          if (timer !== null) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          if (portPoll !== null) {
-            clearInterval(portPoll);
-            portPoll = null;
-          }
-        };
+      const cleanup = () => {
+        if (timer !== null) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (portPoll !== null) {
+          clearInterval(portPoll);
+          portPoll = null;
+        }
+      };
 
-        const resolveOnce = (port: number) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolvePort(port);
-        };
+      const resolveOnce = (port: number) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolvePort(port);
+      };
 
-        const rejectOnce = (err: Error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          rejectPort(err);
-        };
+      const rejectOnce = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        rejectPort(err);
+      };
 
-        timer = setTimeout(() => {
-          rejectOnce(new Error(`Chromium DevTools port timed out (${stderrBuf.trim()})`));
-        }, this.timeoutMs);
+      timer = setTimeout(() => {
+        rejectOnce(new Error(`Chromium DevTools port timed out (${stderrBuf.trim()})`));
+      }, this.timeoutMs);
 
-        portPoll = setInterval(() => {
-          if (settled || !existsSync(activePortPath)) return;
-          try {
-            const parsedPort = parseDevToolsActivePortFile(readFileSync(activePortPath, 'utf8'));
-            if (parsedPort !== null) {
-              resolveOnce(parsedPort);
-            }
-          } catch {
-            // File may still be flushing on disk; retry on next poll tick.
-          }
-        }, 100);
-
-        child.stderr?.on('data', (chunk: Buffer) => {
-          stderrBuf += chunk.toString('utf8');
-          const parsedPort = parseDevToolsPortFromStderr(stderrBuf);
+      portPoll = setInterval(() => {
+        if (settled || !existsSync(activePortPath)) return;
+        try {
+          const parsedPort = parseDevToolsActivePortFile(readFileSync(activePortPath, 'utf8'));
           if (parsedPort !== null) {
             resolveOnce(parsedPort);
           }
-        });
+        } catch {
+          // File may still be flushing on disk; retry on next poll tick.
+        }
+      }, 100);
 
-        child.on('error', (err) => {
-          rejectOnce(err);
-        });
-
-        child.on('exit', (code) => {
-          rejectOnce(new Error(`Chromium exited prematurely (${String(code)}): ${stderrBuf}`));
-        });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderrBuf += chunk.toString('utf8');
+        const parsedPort = parseDevToolsPortFromStderr(stderrBuf);
+        if (parsedPort !== null) {
+          resolveOnce(parsedPort);
+        }
       });
 
-      const pageWsUrl = await fetchPageWebSocketUrl(devToolsPort, this.timeoutMs);
-      await this.connectWebSocket(pageWsUrl);
-      this.running = true;
-
-      await this.sendCommand('Page.enable');
-      await this.sendCommand('Emulation.setDeviceMetricsOverride', {
-        width: this.width,
-        height: this.height,
-        deviceScaleFactor: 1,
-        mobile: false,
+      child.on('error', (err) => {
+        rejectOnce(err);
       });
 
-      if (startOptions.addScriptToEvaluateOnNewDocument) {
-        await this.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-          source: startOptions.addScriptToEvaluateOnNewDocument,
-        });
-      }
-
-      await this.sendCommand('Page.startScreencast', {
-        format: 'jpeg',
-        quality: 65,
-        maxWidth: this.width,
-        maxHeight: this.height,
-        everyNthFrame: 1,
+      child.on('exit', (code) => {
+        rejectOnce(new Error(`Chromium exited prematurely (${String(code)}): ${stderrBuf}`));
       });
+    });
 
-      const loadPromise = this.waitForEvent('Page.loadEventFired', 5000);
-      await this.sendCommand('Page.navigate', { url });
-      await loadPromise;
-    } catch (error) {
-      await this.stop();
-      throw error;
+    const pageWsUrl = await fetchPageWebSocketUrl(devToolsPort, this.timeoutMs);
+    await this.connectWebSocket(pageWsUrl);
+    this.running = true;
+
+    await this.sendCommand('Page.enable');
+    await this.sendCommand('Emulation.setDeviceMetricsOverride', {
+      width: this.width,
+      height: this.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+
+    if (startOptions.addScriptToEvaluateOnNewDocument) {
+      await this.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+        source: startOptions.addScriptToEvaluateOnNewDocument,
+      });
     }
+
+    await this.sendCommand('Page.startScreencast', {
+      format: 'jpeg',
+      quality: 65,
+      maxWidth: this.width,
+      maxHeight: this.height,
+      everyNthFrame: 1,
+    });
+
+    const loadPromise = this.waitForEvent('Page.loadEventFired', 5000);
+    await this.sendCommand('Page.navigate', { url });
+    await loadPromise;
   }
 
   private async connectWebSocket(wsUrl: string): Promise<void> {

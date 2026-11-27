@@ -517,7 +517,12 @@ describe('Chaos Test 6: Slice 05 A2UI 1.0 catalog, TS macro expander, SSE cockpi
     const chromium = detectChromiumBinary();
     expect(chromium).not.toBeNull();
 
-    const session = new CdpScreencastSession({ width: 800, height: 600, timeoutMs: 25_000 });
+    const session = new CdpScreencastSession({
+      width: 800,
+      height: 600,
+      timeoutMs: 25_000,
+      maxStartAttempts: 2,
+    });
     activeSessions.push(session);
 
     try {
@@ -542,5 +547,5 @@ describe('Chaos Test 6: Slice 05 A2UI 1.0 catalog, TS macro expander, SSE cockpi
     }
 
     expect(session.isRunning).toBe(false);
-  }, 45_000);
+  }, 65_000);
 });
