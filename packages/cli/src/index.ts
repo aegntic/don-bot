@@ -131,6 +131,8 @@ function renderHelp(): string {
     '  --dir <path>                     Target repository directory (default: cwd)',
     '  --faux                           Use deterministic offline scripted provider',
     '  --role <roleId>                  Override active role (lead|api-keeper|pipeline-forge|client-qa|memory-curator)',
+    '  --worktree                       Run coding specialist in an isolated git worktree',
+    '  --verify                         Run oxc code gate (oxlint/oxfmt/typecheck/tests) after completion',
     '  --provider <id>                  Provider ID for auth set/logout (openrouter|anthropic|openai|google|typesafe)',
     '  --key <secret>                   API key for auth set (never printed back; prompts masked if omitted in TTY)',
     '  --non-interactive                Run onboard without interactive terminal prompts',
@@ -228,6 +230,8 @@ export async function runCli(
       dir: { type: 'string' },
       faux: { type: 'boolean', default: false },
       role: { type: 'string' },
+      worktree: { type: 'boolean', default: false },
+      verify: { type: 'boolean', default: false },
       provider: { type: 'string' },
       key: { type: 'string' },
       'non-interactive': { type: 'boolean', default: false },
@@ -538,6 +542,8 @@ export async function runCli(
       goal,
       faux: useFaux,
       role: command === 'run' ? (role ?? 'api-keeper') : role,
+      worktree: Boolean(parsed.values.worktree),
+      verifyCodeGate: Boolean(parsed.values.verify),
       config:
         command === 'run'
           ? {
@@ -555,12 +561,25 @@ export async function runCli(
       `  mode:       ${result.mode} (${result.model.provider}/${result.model.modelId})`,
       `  role:       ${result.activeRole}`,
       `  complexity: ${result.complexity.complexity} (room=${result.roomId ? `${result.roomId}, msgs=${result.roomMessages.length}` : 'bypassed'})`,
+      ...(result.worktreePath
+        ? [`  worktree:   ${result.worktreePath} (${result.worktreeBranch ?? 'detached'})`]
+        : []),
+      ...(result.toolCalls.length > 0 ? [`  tools:      ${result.toolCalls.join(', ')}`] : []),
       `  budget:     taskUsd=$${result.budget.taskUsd.toFixed(4)} status=${result.budget.status}`,
+      ...(result.codeGate
+        ? [
+            `  codeGate:   ${result.codeGate.passed ? 'passed' : `failed (${result.codeGate.failedStage ?? 'unknown'})`}`,
+          ]
+        : []),
       ...(result.skillGate ? [`  skillGate:  ${result.skillGate.summary}`] : []),
+      ...(result.errorReason ? [`  error:      ${result.errorReason}`] : []),
       `  summary:    ${result.summary}`,
+      ...(result.assistantOutput ? [`  output:     ${result.assistantOutput}`] : []),
     ];
     emitResult(asJson, result, lines, out);
-    return result.status === 'blocked' ? 1 : 0;
+    return result.status !== 'done' || (result.codeGate !== undefined && !result.codeGate.passed)
+      ? 1
+      : 0;
   }
 
   if (command === 'resume') {

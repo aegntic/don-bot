@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { createSandbox, type SandboxPort } from '@don-bot/trust';
 
@@ -95,9 +95,22 @@ function hasProjectTests(dir: string, depth = 0): boolean {
   return false;
 }
 
+function resolveRealPath(targetPath: string): string {
+  try {
+    return normalize(realpathSync(targetPath));
+  } catch {
+    return normalize(resolve(targetPath));
+  }
+}
+
+function resolveCodeTargets(cwd: string): string[] {
+  const candidates = ['packages', 'src', 'tests'].filter((dir) => existsSync(join(cwd, dir)));
+  return candidates.length > 0 ? candidates : ['.'];
+}
+
 function isBwrapFriendlyBinary(binPath: string, cwd: string): boolean {
-  const resolvedCwd = normalize(resolve(cwd));
-  const resolvedBin = normalize(resolve(binPath));
+  const resolvedCwd = resolveRealPath(cwd);
+  const resolvedBin = resolveRealPath(binPath);
   if (resolvedBin.startsWith(resolvedCwd)) return true;
   if (
     resolvedBin.startsWith('/usr/') ||
@@ -151,14 +164,16 @@ export async function runCodeGate(options: RunCodeGateOptions): Promise<CodeGate
 
   const planned: Array<{ stage: CodeGateStage; command: string; args: readonly string[] }> = [];
 
+  const targets = resolveCodeTargets(cwd);
+
   if (options.runLint !== false) {
     const hasOxlintConfig =
       existsSync(join(cwd, 'oxlint.json')) || existsSync(join(cwd, '.oxlintrc.json'));
-    const lintArgs = hasOxlintConfig ? ['.'] : ['-D', 'correctness', '.'];
+    const lintArgs = hasOxlintConfig ? targets : ['-D', 'correctness', ...targets];
     planned.push({ stage: 'lint', command: oxlintBin, args: lintArgs });
   }
   if (options.runFmtCheck !== false) {
-    planned.push({ stage: 'format', command: oxfmtBin, args: ['--check', '.'] });
+    planned.push({ stage: 'format', command: oxfmtBin, args: ['--check', ...targets] });
   }
   if (options.runTypecheck === true) {
     const tscBin = resolveTscTool(cwd);

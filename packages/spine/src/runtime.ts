@@ -38,6 +38,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { createCodingTools, createReadTool } from '@earendil-works/pi-durable/tools';
 import { bool, num, obj, opt, str } from '@earendil-works/pi-schema';
 import { createDecisionCard, enforceBudget, getBudgetSnapshot, recordUsage } from './budget.ts';
 import { createSelfCompactExtension } from './compact.ts';
@@ -168,6 +169,7 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
   });
   const readOnlyToolSet = new Set([
     'self_compact',
+    'read',
     'read_file',
     'list_files',
     'record_lane_handoff',
@@ -475,6 +477,8 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
 export {
   BACKGROUND_CONTEXT,
   bool,
+  createCodingTools,
+  createReadTool,
   defineExtension,
   defineTool,
   extractHostsFromText,
@@ -482,9 +486,12 @@ export {
   fauxProvider,
   fauxText,
   fauxToolCall,
+  GenerationTask,
+  hook,
   num,
   obj,
   opt,
   str,
+  ToolTask,
   type Context,
 };

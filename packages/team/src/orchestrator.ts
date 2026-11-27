@@ -4,11 +4,15 @@ import { join, resolve } from 'node:path';
 import {
   BACKGROUND_CONTEXT,
   type BudgetSnapshot,
+  createCodingTools,
+  createReadTool,
   defineExtension,
   defineTool,
   type DonConfig,
   fauxAssistantMessage,
   fauxToolCall,
+  GenerationTask,
+  hook,
   loadDonConfig,
   obj,
   openDonDb,
@@ -19,6 +23,7 @@ import {
   type ResolvedTierModel,
   resolveTierModel,
   str,
+  ToolTask,
   updateTurnStatus,
   VaultCredentialStore,
 } from '@don-bot/spine';
@@ -41,12 +46,14 @@ import {
   type TaskComplexityResult,
 } from './rooms.ts';
 import { runSkillGate, type SkillGateEnvelope } from './skill-gate.ts';
+import { createSpecialistWorktree } from './worktree.ts';
 
 export interface RunTeamGoalOptions {
   readonly dir: string;
   readonly goal: string;
   readonly faux?: boolean;
   readonly role?: AgentRoleId;
+  readonly worktree?: boolean;
   readonly config?: DonConfig;
   readonly jevClient?: JevDecisionPort;
   readonly safeAgentsMode?: SafeAgentsMode;
@@ -66,6 +73,11 @@ export interface RunTeamGoalResult {
   readonly roomMessages: readonly RoomMessageRecord[];
   readonly status: string;
   readonly summary: string;
+  readonly assistantOutput: string;
+  readonly toolCalls: readonly string[];
+  readonly errorReason?: string;
+  readonly worktreePath?: string;
+  readonly worktreeBranch?: string;
   readonly budget: BudgetSnapshot;
   readonly codeGate?: CodeGateEnvelope;
   readonly skillGate?: SkillGateEnvelope;
@@ -121,6 +133,48 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   const taskId = `task-${randomUUID().slice(0, 8)}`;
   const turnId = `turn-${randomUUID()}`;
 
+  const createdWorktree =
+    options.worktree && activeProfile.canWriteCode
+      ? createSpecialistWorktree(dir, {
+          taskId,
+          roleId: activeRole,
+          worktreeRoot: resolve(dir, config.team.worktreeDir),
+        })
+      : undefined;
+  const executionCwd = createdWorktree ? createdWorktree.path : dir;
+
+  const toolsExt = activeProfile.canWriteCode
+    ? createCodingTools()
+    : defineExtension({
+        name: 'don-read-only-tools',
+        tools: [createReadTool()],
+      });
+
+  let lastAssistantText = '';
+  const invokedTools: string[] = [];
+  const outputCaptureExt = defineExtension({
+    name: 'don-output-capture',
+    hooks: [
+      hook(GenerationTask, {
+        afterResponse(message) {
+          const text = message.content
+            .map((block) => (block.type === 'text' ? block.text : ''))
+            .join('\n')
+            .trim();
+          if (text) {
+            lastAssistantText = text;
+          }
+        },
+      }),
+      hook(ToolTask, {
+        beforeTool(call) {
+          invokedTools.push(call.name);
+          return undefined;
+        },
+      }),
+    ],
+  });
+
   const loggedSteps: string[] = [];
   let spineRef: Awaited<ReturnType<typeof openDonSpine>> | null = null;
   const teamExt = defineExtension({
@@ -150,7 +204,7 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
         }),
         async execute(args) {
           const gate = await runSkillGate({
-            cwd: dir,
+            cwd: executionCwd,
             targetPath: args.path,
             config,
             db: spineRef?.db,
@@ -185,15 +239,16 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
     config,
     faux: useFaux,
     jevClient: activeJev ?? undefined,
-    cwd: dir,
+    cwd: executionCwd,
     safeAgentsMode: options.safeAgentsMode ?? config.safeagents.mode,
-    extraExtensions: [teamExt],
+    extraExtensions: [toolsExt, outputCaptureExt, teamExt],
   });
   spineRef = spine;
 
   let roomId: string | undefined;
   let roomMessages: RoomMessageRecord[] = [];
   let settledStatus = 'done';
+  let errorReason: string | undefined;
   let summary = '';
   let budgetSnapshot: BudgetSnapshot;
   let skillGate: SkillGateEnvelope | undefined;
@@ -302,19 +357,26 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
 
     const settled = await submission.wait(BACKGROUND_CONTEXT);
     settledStatus = settled.status;
+    if (settled.status === 'unanswered') {
+      const reasonParts = [
+        settled.reason,
+        settled.detail !== undefined ? JSON.stringify(settled.detail) : '',
+      ].filter((part) => part.length > 0);
+      errorReason = reasonParts.join(': ');
+    }
     summary =
       settled.status === 'done'
         ? `Goal ${taskId} completed (${complexity.complexity}; ${complexity.recommendedRoles.join(', ')})`
-        : `Goal ${taskId} ended with status=${settled.status}`;
+        : `Goal ${taskId} ended with status=${settled.status}${errorReason ? ` (${errorReason})` : ''}`;
 
     const shouldRunSkillGate =
       options.verifySkillGate === true ||
       (options.verifySkillGate !== false &&
         config.skillEvaluator.enabled &&
-        discoverSkillDirs(dir, config.skillEvaluator.skillPaths).length > 0);
+        discoverSkillDirs(executionCwd, config.skillEvaluator.skillPaths).length > 0);
     if (shouldRunSkillGate) {
       skillGate = await runSkillGate({
-        cwd: dir,
+        cwd: executionCwd,
         config,
         db: spine.db,
         taskId,
@@ -335,8 +397,8 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
   }
 
   let codeGate: CodeGateEnvelope | undefined;
-  if (options.verifyCodeGate) {
-    codeGate = await runCodeGate({ cwd: dir });
+  if (options.verifyCodeGate && settledStatus === 'done') {
+    codeGate = await runCodeGate({ cwd: executionCwd });
   }
 
   return {
@@ -350,6 +412,12 @@ export async function runTeamGoal(options: RunTeamGoalOptions): Promise<RunTeamG
     roomMessages,
     status: settledStatus,
     summary,
+    assistantOutput: lastAssistantText,
+    toolCalls: invokedTools,
+    ...(errorReason ? { errorReason } : {}),
+    ...(createdWorktree
+      ? { worktreePath: createdWorktree.path, worktreeBranch: createdWorktree.branch }
+      : {}),
     budget: budgetSnapshot,
     codeGate,
     skillGate,
