@@ -46,6 +46,14 @@
 
 ![Don-Bot System Topology](./assets/diagrams/system-topology.svg)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/diagrams/don-bot-stack-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/diagrams/don-bot-stack.png" />
+    <img src="./assets/diagrams/don-bot-stack.png" alt="Don-Bot v0.6.0 Tech Stack Diagram" width="100%" />
+  </picture>
+</p>
+
 ```mermaid
 flowchart TB
   subgraph Operators["Human-Near-The-Loop Surfaces"]

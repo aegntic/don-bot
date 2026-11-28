@@ -8,6 +8,14 @@ Don-Bot is structured as a 6-package TypeScript/Bun monorepo (`packages/*` plus 
 
 ![Don-Bot System Topology](../assets/diagrams/system-topology.svg)
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/diagrams/don-bot-stack-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="../assets/diagrams/don-bot-stack.png" />
+    <img src="../assets/diagrams/don-bot-stack.png" alt="Don-Bot v0.6.0 Tech Stack Diagram" width="100%" />
+  </picture>
+</p>
+
 > See [`WORKFLOWS.md`](./WORKFLOWS.md) for visual end-to-end onboarding, delegation, Core Four, Cron, and Meta-Factory flowmaps.
 
 ---
