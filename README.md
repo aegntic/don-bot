@@ -288,6 +288,7 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 
 - Deep Architecture Reference: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - Visual Operational Playbook & Flowmaps: [`docs/WORKFLOWS.md`](./docs/WORKFLOWS.md)
+- Don-Bot ↔ LangGraph Portability Guide: [`docs/LANGGRAPH_PORTABILITY.md`](./docs/LANGGRAPH_PORTABILITY.md)
 - Specification & Invariants: [`SPEC.md`](./SPEC.md)
 - Security Policy & Threat Model: [`SECURITY.md`](./SECURITY.md)
 - Contributor Guide & Verification Gate: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
