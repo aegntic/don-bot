@@ -1,4 +1,4 @@
-export const TRUST_PACKAGE_VERSION = '0.6.0-rc.3';
+export const TRUST_PACKAGE_VERSION = '0.6.0';
 
 export * from './access-key.ts';
 export * from './don-guard.ts';
