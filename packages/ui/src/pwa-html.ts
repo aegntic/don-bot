@@ -196,6 +196,62 @@ export function renderCockpitHtml(): string {
       border-color: var(--orange);
       color: var(--white);
     }
+    .btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .team-switcher {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 18px;
+      background: rgba(15, 20, 29, 0.85);
+      border-bottom: 1px solid var(--metal);
+    }
+
+    .team-switcher-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-right: 4px;
+    }
+
+    .slice-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .slice-chip {
+      appearance: none;
+      border: 1px solid var(--metal);
+      background: var(--obsidian);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .slice-chip.active {
+      border-color: var(--ice);
+      background: var(--ice-soft);
+      color: var(--ice);
+    }
+
+    .slice-chip.locked {
+      border-color: var(--orange-soft);
+      color: var(--orange);
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
 
     .cockpit-grid {
       display: grid;
@@ -532,6 +588,17 @@ export function renderCockpitHtml(): string {
     </div>
   </header>
 
+  <nav class="team-switcher" id="team-switcher" aria-label="Team Lane Switcher">
+    <span class="team-switcher-label">~ Team Switcher</span>
+    <button class="btn primary" data-lane="all" type="button">All Lanes</button>
+    <button class="btn" data-lane="lead" type="button">@lead</button>
+    <button class="btn" data-lane="api-keeper" type="button">@api-keeper</button>
+    <button class="btn" data-lane="pipeline-forge" type="button">@pipeline-forge</button>
+    <button class="btn" data-lane="client-qa" type="button">@client-qa</button>
+    <button class="btn" data-lane="memory-curator" type="button">@memory-curator</button>
+    <span class="pill ice" id="active-lane-pill">Lane: all</span>
+  </nav>
+
   <nav class="mobile-tabs" aria-label="Pane Switcher">
     <button class="btn primary" data-pane-tab="center" type="button">Deck & Gates</button>
     <button class="btn" data-pane-tab="left" type="button">Lanes & Timeline</button>
@@ -676,8 +743,16 @@ export function renderCockpitHtml(): string {
   <div class="modal-backdrop" id="steer-modal">
     <div class="modal-card">
       <div class="card-head">
-        <span class="card-kind">~ Quick Operator Steer</span>
+        <span class="card-kind">~ Quick Operator Steer &amp; Lane Switcher</span>
         <button class="btn" id="steer-close" type="button">Esc</button>
+      </div>
+      <div class="card-actions" id="modal-lane-switcher">
+        <button class="btn primary" data-lane-choice="all" type="button">all</button>
+        <button class="btn" data-lane-choice="lead" type="button">@lead</button>
+        <button class="btn" data-lane-choice="api-keeper" type="button">@api-keeper</button>
+        <button class="btn" data-lane-choice="pipeline-forge" type="button">@pipeline-forge</button>
+        <button class="btn" data-lane-choice="client-qa" type="button">@client-qa</button>
+        <button class="btn" data-lane-choice="memory-curator" type="button">@memory-curator</button>
       </div>
       <input class="input" id="steer-input" type="text" placeholder="Steer directive (creates authenticated don_turns row)" />
       <div class="card-actions">
@@ -689,8 +764,11 @@ export function renderCockpitHtml(): string {
   <script>
     (() => {
       const STORAGE_KEY = 'don_access_key';
+      const ALL_SLICES = ['coding', 'read', 'skill_eval', 'cron', 'core_four', 'delegate', 'memory'];
       let lastSeq = 0;
       let streamAbort = null;
+      let activeLane = 'all';
+      let lastSurface = null;
 
       const elAuthGate = document.getElementById('auth-gate');
       const elAuthError = document.getElementById('auth-error');
@@ -725,6 +803,23 @@ export function renderCockpitHtml(): string {
       const elPreviewFrame = document.getElementById('preview-frame');
       const elSteerModal = document.getElementById('steer-modal');
       const elSteerInput = document.getElementById('steer-input');
+      const elActiveLanePill = document.getElementById('active-lane-pill');
+
+      function setActiveLane(lane) {
+        activeLane = lane || 'all';
+        if (elActiveLanePill) {
+          elActiveLanePill.textContent = 'Lane: ' + activeLane;
+        }
+        document.querySelectorAll('[data-lane]').forEach((btn) => {
+          btn.classList.toggle('primary', btn.getAttribute('data-lane') === activeLane);
+        });
+        document.querySelectorAll('[data-lane-choice]').forEach((btn) => {
+          btn.classList.toggle('primary', btn.getAttribute('data-lane-choice') === activeLane);
+        });
+        if (lastSurface) {
+          renderSurface(lastSurface);
+        }
+      }
 
       function getToken() {
         return sessionStorage.getItem(STORAGE_KEY) || '';
@@ -761,10 +856,12 @@ export function renderCockpitHtml(): string {
 
       function renderComponent(node) {
         const card = document.createElement('article');
+        const p = node.props || {};
         const isAlert =
           node.component === 'GuardAlert' ||
-          (node.component === 'DecisionCard' && node.props.status === 'pending') ||
-          (node.component === 'SkillEvalCard' && node.props.status === 'failed');
+          (node.component === 'DecisionCard' && p.status === 'pending') ||
+          (node.component === 'SkillEvalCard' && p.status === 'failed') ||
+          (node.component === 'CronJobCard' && (p.lastStatus === 'failed' || p.lastStatus === 'budget_paused'));
         card.className = isAlert ? 'card alert-card' : 'card';
 
         const head = document.createElement('div');
@@ -773,7 +870,6 @@ export function renderCockpitHtml(): string {
         head.appendChild(createTextEl('span', 'mono-meta', node.id));
         card.appendChild(head);
 
-        const p = node.props || {};
         if (node.component === 'DecisionCard') {
           card.appendChild(createTextEl('p', 'card-body', String(p.question || '')));
           card.appendChild(
@@ -833,6 +929,121 @@ export function renderCockpitHtml(): string {
             list.appendChild(row);
           });
           card.appendChild(list);
+        } else if (node.component === 'CoreFourCard') {
+          card.appendChild(
+            createTextEl(
+              'div',
+              'card-body',
+              '@' + String(p.roleId) + ' · ' + String(p.title),
+            ),
+          );
+          card.appendChild(
+            createTextEl(
+              'div',
+              'mono-meta',
+              'tier=' + String(p.modelTier) +
+                ' · model=' + String(p.provider) + '/' + String(p.modelId) +
+                ' · thinking=' + String(p.thinkingLevel) +
+                ' · write=' + (p.canWriteCode ? 'yes' : 'locked'),
+            ),
+          );
+          if (p.extraInstructions) {
+            card.appendChild(createTextEl('div', 'mono-meta', 'instructions: ' + String(p.extraInstructions)));
+          }
+          const activeSlices = Array.isArray(p.enabledSlices) ? p.enabledSlices : [];
+          const chips = document.createElement('div');
+          chips.className = 'slice-chips';
+          ALL_SLICES.forEach((slice) => {
+            const isEnabled = activeSlices.includes(slice);
+            const isLocked = !p.canWriteCode && slice === 'coding';
+            const chip = createTextEl(
+              'button',
+              isLocked ? 'slice-chip locked' : isEnabled ? 'slice-chip active' : 'slice-chip',
+              isLocked ? slice + ' (locked)' : slice,
+            );
+            chip.type = 'button';
+            chip.setAttribute('data-role-id', String(p.roleId));
+            chip.setAttribute('data-slice', slice);
+            if (isLocked) {
+              chip.disabled = true;
+              chip.setAttribute('aria-disabled', 'true');
+            } else {
+              chip.addEventListener('click', async () => {
+                const res = await apiFetch('/api/team/core-four', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ roleId: p.roleId, slice, enabled: !isEnabled }),
+                });
+                if (res.ok) {
+                  await loadSurface();
+                }
+              });
+            }
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+        } else if (node.component === 'CronJobCard') {
+          card.appendChild(
+            createTextEl(
+              'div',
+              'card-body',
+              String(p.name) + ' (@' + String(p.roleId) + ')',
+            ),
+          );
+          const nextDate = p.nextRunAt ? new Date(Number(p.nextRunAt)).toISOString() : 'n/a';
+          card.appendChild(
+            createTextEl(
+              'div',
+              'mono-meta',
+              'schedule=' + String(p.schedule) +
+                ' · enabled=' + String(Boolean(p.enabled)) +
+                ' · status=' + String(p.lastStatus || 'idle') +
+                ' · next=' + nextDate,
+            ),
+          );
+          if (p.lastSummary) {
+            card.appendChild(createTextEl('div', 'mono-meta', String(p.lastSummary)));
+          }
+          const actions = document.createElement('div');
+          actions.className = 'card-actions';
+          const toggleBtn = createTextEl(
+            'button',
+            p.enabled ? 'btn hold' : 'btn primary',
+            p.enabled ? 'Pause' : 'Resume',
+          );
+          toggleBtn.type = 'button';
+          toggleBtn.addEventListener('click', async () => {
+            const res = await apiFetch('/api/cron/' + encodeURIComponent(String(p.jobId)) + '/toggle', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: !p.enabled }),
+            });
+            if (res.ok) await loadSurface();
+          });
+          const runBtn = createTextEl('button', 'btn primary', 'Run Now');
+          runBtn.type = 'button';
+          runBtn.addEventListener('click', async () => {
+            const res = await apiFetch('/api/cron/' + encodeURIComponent(String(p.jobId)) + '/run', {
+              method: 'POST',
+            });
+            if (res.ok) await loadSurface();
+          });
+          actions.appendChild(toggleBtn);
+          actions.appendChild(runBtn);
+          card.appendChild(actions);
+        } else if (node.component === 'ToolSummaryCard') {
+          card.appendChild(
+            createTextEl(
+              'div',
+              'card-body',
+              '@' + String(p.agentId) + ' · batch #' + String(p.batchIndex) + ' (' + String(p.toolCount) + ' tools)',
+            ),
+          );
+          card.appendChild(createTextEl('div', 'mono-meta', String(p.summary || '')));
+          const toolNames = Array.isArray(p.tools) ? p.tools.join(', ') : '';
+          if (toolNames) {
+            card.appendChild(createTextEl('div', 'mono-meta', 'tools: ' + toolNames));
+          }
         } else {
           const summary = Object.entries(p)
             .slice(0, 6)
@@ -845,6 +1056,7 @@ export function renderCockpitHtml(): string {
       }
 
       function renderSurface(surface) {
+        lastSurface = surface;
         clearChildren(elLeft);
         clearChildren(elCenter);
         clearChildren(elRight);
@@ -854,8 +1066,26 @@ export function renderCockpitHtml(): string {
         let centerCount = 0;
 
         components.forEach((node) => {
+          const p = node.props || {};
+          if (activeLane !== 'all') {
+            if (
+              (node.component === 'CoreFourCard' || node.component === 'CronJobCard') &&
+              p.roleId !== activeLane
+            ) {
+              return;
+            }
+            if (node.component === 'ToolSummaryCard' && p.agentId !== activeLane) {
+              return;
+            }
+          }
+
           const rendered = renderComponent(node);
-          if (node.component === 'BudgetGauge' || node.component === 'WorktreeLane' || node.component === 'RunTimeline') {
+          if (
+            node.component === 'BudgetGauge' ||
+            node.component === 'WorktreeLane' ||
+            node.component === 'RunTimeline' ||
+            node.component === 'ToolSummaryCard'
+          ) {
             elLeft.appendChild(rendered);
             leftCount += 1;
           } else if (node.component === 'OutcomeReceipt') {
@@ -1245,9 +1475,23 @@ export function renderCockpitHtml(): string {
         await dispatchAction('run.resume_step', { ownerText: txt });
       });
 
+      document.querySelectorAll('[data-lane]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setActiveLane(btn.getAttribute('data-lane') || 'all');
+        });
+      });
+
+      document.querySelectorAll('[data-lane-choice]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setActiveLane(btn.getAttribute('data-lane-choice') || 'all');
+        });
+      });
+
       window.addEventListener('keydown', (ev) => {
+        const activeTag = document.activeElement ? document.activeElement.tagName : '';
+        const isTyping = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT';
         if (ev.key === '~' || ev.key === '\`') {
-          if (document.activeElement !== elSteerInput) {
+          if (!isTyping) {
             ev.preventDefault();
             elSteerModal.classList.add('open');
             elSteerInput.focus();

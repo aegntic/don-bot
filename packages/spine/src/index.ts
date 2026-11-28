@@ -3,7 +3,7 @@ import * as piDurable from '@earendil-works/pi-durable';
 import * as piDurableSqliteNode from '@earendil-works/pi-durable/storage/sqlite/node';
 import { TRUST_PACKAGE_VERSION } from '@don-bot/trust';
 
-export const SPINE_PACKAGE_VERSION = '0.6.0-rc.2';
+export const SPINE_PACKAGE_VERSION = '0.6.0-rc.3';
 
 export function getSpineStatus(): {
   spine: string;
@@ -24,7 +24,9 @@ export function getSpineStatus(): {
 export * from './budget.ts';
 export * from './compact.ts';
 export * from './config.ts';
+export * from './core-four.ts';
 export * from './credentials.ts';
+export * from './cron.ts';
 export * from './db.ts';
 export * from './events.ts';
 export * from './memory.ts';
@@ -32,4 +34,5 @@ export * from './replay.ts';
 export * from './rollback.ts';
 export * from './runtime.ts';
 export * from './skill-evals.ts';
+export * from './tool-summarizer.ts';
 export * from './turn-lock.ts';

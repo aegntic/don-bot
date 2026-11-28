@@ -222,6 +222,7 @@ mod tests {
         assert!(!is_secret_env_name("HOME"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn scrubs_secrets_masks_stdout_and_enforces_timeout() {
         let unique = format!(
@@ -269,6 +270,73 @@ mod tests {
         )
         .unwrap();
         assert!(timed.timed_out);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scrubs_secrets_and_masks_stdout_on_windows() {
+        let unique = format!(
+            "don-guard-sandbox-win-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cwd = dir.to_string_lossy().into_owned();
+
+        let parent_secret_var = "DON_WIN_TEST_API_KEY";
+        assert!(is_secret_env_name(parent_secret_var));
+        std::env::set_var(parent_secret_var, "parent_secret_should_be_scrubbed");
+
+        let scrub_res = exec_sandboxed(
+            "cmd.exe",
+            &[
+                "/C".to_string(),
+                "if defined DON_WIN_TEST_API_KEY (echo LEAKED) else (echo SCRUBBED)".to_string(),
+            ],
+            &cwd,
+            5_000,
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
+
+        std::env::remove_var(parent_secret_var);
+
+        assert_eq!(scrub_res.exit_code, 0);
+        assert!(!scrub_res.timed_out);
+        assert!(scrub_res.stdout.contains("SCRUBBED"));
+        assert!(!scrub_res.stdout.contains("LEAKED"));
+        assert!(!scrub_res.stdout.contains("parent_secret_should_be_scrubbed"));
+
+        let mut inject = HashMap::new();
+        inject.insert("INJECTED_SECRET".to_string(), "tok_super_secret_1234".to_string());
+        let extra = vec!["extra_secret_xyz987".to_string()];
+
+        let mask_res = exec_sandboxed(
+            "cmd.exe",
+            &[
+                "/C".to_string(),
+                "echo INJ=%INJECTED_SECRET% EXTRA=extra_secret_xyz987".to_string(),
+            ],
+            &cwd,
+            5_000,
+            &inject,
+            &extra,
+        )
+        .unwrap();
+
+        assert_eq!(mask_res.exit_code, 0);
+        assert!(!mask_res.timed_out);
+        assert!(mask_res.stdout.contains("INJ=[REDACTED:VAULT]"));
+        assert!(mask_res.stdout.contains("EXTRA=[REDACTED:VAULT]"));
+        assert!(!mask_res.stdout.contains("tok_super_secret_1234"));
+        assert!(!mask_res.stdout.contains("extra_secret_xyz987"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

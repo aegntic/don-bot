@@ -10,22 +10,42 @@ import {
 } from '@don-bot/meta';
 import {
   appendEvent,
+  claimDueCronJobs,
+  createCronJob,
+  deleteCronJob,
+  getBudgetSnapshot,
+  getCronJob,
+  getDefaultSlicesForRole,
   getOnboardingStatus,
+  listAgentCoreFourOverrides,
+  listCronJobs,
+  listToolSummaries,
   loadDonConfig,
   OAuthSessionManager,
   openDonDb,
   readEventsAfter,
+  recordCronJobRun,
   recordTurn,
+  resetAgentCoreFourOverride,
   resolveDecisionCard,
+  resolveEffectiveRoleModel,
+  setAgentCoreFourOverride,
+  setCronJobEnabled,
+  toggleAgentHarnessSlice,
   updateTurnStatus,
   VaultCredentialStore,
   withTurnLock,
+  type CronJobRecord,
   type DecisionCard,
   type DonConfig,
   type DonDatabase,
+  type DonEventKind,
   type DonEventRecord,
+  type HarnessSliceId,
+  type ModelTier,
+  type ThinkingLevel,
 } from '@don-bot/spine';
-import { gcWorktrees } from '@don-bot/team';
+import { DEFAULT_ROSTER, gcWorktrees, getAgentProfile, type AgentRoleId } from '@don-bot/team';
 import { BlindVault, BlindVaultError, ensureAccessKey, verifyAccessKey } from '@don-bot/trust';
 import { ALL_ALLOWED_CATALOG_ACTIONS, A2UI_VERSION, DON_CATALOG_ID } from './a2ui.ts';
 import { buildHydratedCockpitSurface, buildZeroLlmPatchFromEvent } from './macros.ts';
@@ -43,6 +63,11 @@ export interface StartCockpitServerOptions {
   readonly config?: DonConfig;
   readonly oauthProviders?: CockpitOAuthProviders;
   readonly pairingTtlMs?: number;
+  readonly cronEnabled?: boolean;
+  readonly cronPollMs?: number;
+  readonly onCronTrigger?: (
+    job: CronJobRecord,
+  ) => Promise<{ status: 'done' | 'failed'; summary: string }>;
 }
 
 export interface CockpitServerHandle {
@@ -54,6 +79,7 @@ export interface CockpitServerHandle {
   readonly pairingCode: string;
   rotatePairingCode(): string;
   broadcastEvent(event: DonEventRecord): number;
+  tickCronNow(): Promise<number>;
   stop(): Promise<void>;
 }
 
@@ -165,19 +191,127 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
   const subscribers = new Set<SseSubscriber>();
   const previewStore = new Map<string, string>();
   const cockpitHtml = renderCockpitHtml();
+  let stopped = false;
+  let inFlightTick: Promise<number> | null = null;
 
-  function emitSystemAndBroadcast(payload: unknown): number {
-    const seq = appendEvent(db, {
-      runId: 'onboarding',
-      agentId: 'operator',
-      kind: 'system',
-      payload,
-    });
+  function emitEventAndBroadcast(input: {
+    runId: string;
+    agentId?: string;
+    kind: DonEventKind;
+    payload: unknown;
+  }): number {
+    const seq = appendEvent(db, input);
     const persisted = readEventsAfter(db, seq - 1, 1)[0];
     if (persisted) {
       broadcastEvent(persisted);
     }
     return seq;
+  }
+
+  function emitSystemAndBroadcast(payload: unknown): number {
+    return emitEventAndBroadcast({
+      runId: 'onboarding',
+      agentId: 'operator',
+      kind: 'system',
+      payload,
+    });
+  }
+
+  function getLatestSeq(): number {
+    const row = db.raw.prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM don_events').get() as
+      | { max_seq?: number }
+      | undefined;
+    return Number(row?.max_seq ?? 0);
+  }
+
+  function broadcastEventsSince(afterSeq: number): void {
+    const fresh = readEventsAfter(db, afterSeq, 50);
+    for (const ev of fresh) {
+      broadcastEvent(ev);
+    }
+  }
+
+  function buildRoleCoreFourState(roleId: AgentRoleId) {
+    const profile = getAgentProfile(roleId);
+    const override = listAgentCoreFourOverrides(db).find((item) => item.roleId === roleId) ?? null;
+    const effective = resolveEffectiveRoleModel(db, config, roleId, profile.modelTier);
+    const effectiveTier = override?.modelTier ?? profile.modelTier;
+    const enabledSlices = override?.enabledSlices
+      ? [...override.enabledSlices]
+      : getDefaultSlicesForRole(roleId);
+    return {
+      roleId: profile.id,
+      title: profile.title,
+      canWriteCode: profile.canWriteCode,
+      verifierOnly: profile.verifierOnly,
+      defaultTier: profile.modelTier,
+      modelTier: effectiveTier,
+      provider: effective.provider,
+      modelId: effective.modelId,
+      thinkingLevel: effective.thinking,
+      credentialSource: effective.credentialSource,
+      enabledSlices,
+      extraInstructions: override?.extraInstructions ?? null,
+      updatedAt: override?.updatedAt ?? null,
+      override,
+    };
+  }
+
+  async function executeCronJob(job: CronJobRecord): Promise<CronJobRecord | null> {
+    const beforeSeq = getLatestSeq();
+    const budget = getBudgetSnapshot(db, config, { taskId: job.id });
+    const budgetHalted =
+      budget.status === 'exceeded' ||
+      (budget.status as string) === 'halted' ||
+      budget.dailyUsd >= config.budgets.dailyMaxUsd;
+
+    let updated: CronJobRecord | null;
+    if (budgetHalted) {
+      updated = recordCronJobRun(db, job.id, 'budget_paused', 'Paused: daily budget cap reached');
+    } else if (options.onCronTrigger) {
+      try {
+        const result = await options.onCronTrigger(job);
+        updated = recordCronJobRun(db, job.id, result.status, result.summary);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        updated = recordCronJobRun(db, job.id, 'failed', message);
+      }
+    } else {
+      updated = recordCronJobRun(
+        db,
+        job.id,
+        'done',
+        `Scheduled prompt queued for @${job.roleId}: ${job.prompt.slice(0, 120)}`,
+      );
+    }
+
+    broadcastEventsSince(beforeSeq);
+    return updated;
+  }
+
+  async function tickCronNow(): Promise<number> {
+    if (stopped) return 0;
+    if (inFlightTick) {
+      return inFlightTick;
+    }
+
+    const run = (async () => {
+      const dueJobs = claimDueCronJobs(db);
+      for (const job of dueJobs) {
+        if (stopped) break;
+        await executeCronJob(job);
+      }
+      return dueJobs.length;
+    })();
+
+    inFlightTick = run;
+    try {
+      return await run;
+    } finally {
+      if (inFlightTick === run) {
+        inFlightTick = null;
+      }
+    }
   }
 
   const oauthManager = new OAuthSessionManager({
@@ -198,6 +332,17 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
       }
     }
     return delivered;
+  }
+
+  let cronTimer: ReturnType<typeof setInterval> | null = null;
+  if (options.cronEnabled !== false) {
+    const pollMs = Math.max(500, options.cronPollMs ?? 30_000);
+    cronTimer = setInterval(() => {
+      if (!stopped) {
+        void tickCronNow().catch(() => {});
+      }
+    }, pollMs);
+    cronTimer.unref?.();
   }
 
   const server = Bun.serve({
@@ -627,6 +772,207 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
         }
       }
 
+      if (pathname === '/api/team/core-four' && req.method === 'GET') {
+        const roles = (Object.keys(DEFAULT_ROSTER) as AgentRoleId[]).map((roleId) =>
+          buildRoleCoreFourState(roleId),
+        );
+        return jsonResponse({ ok: true, roles });
+      }
+
+      if (pathname === '/api/team/core-four' && req.method === 'POST') {
+        let body: {
+          roleId?: unknown;
+          slice?: unknown;
+          enabled?: unknown;
+          modelTier?: unknown;
+          provider?: unknown;
+          modelId?: unknown;
+          thinkingLevel?: unknown;
+          enabledSlices?: unknown;
+          extraInstructions?: unknown;
+          reset?: unknown;
+        };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+        }
+
+        const roleId = typeof body.roleId === 'string' ? body.roleId.trim() : '';
+        if (!roleId || !Object.prototype.hasOwnProperty.call(DEFAULT_ROSTER, roleId)) {
+          return jsonResponse({ ok: false, error: `Unknown team role "${roleId}"` }, 400);
+        }
+
+        try {
+          const beforeSeq = getLatestSeq();
+          if (body.reset === true) {
+            resetAgentCoreFourOverride(db, roleId);
+          } else if (typeof body.slice === 'string' && typeof body.enabled === 'boolean') {
+            toggleAgentHarnessSlice(
+              db,
+              roleId,
+              body.slice as HarnessSliceId,
+              body.enabled,
+              'operator',
+            );
+          } else {
+            if (body.enabledSlices !== undefined && !Array.isArray(body.enabledSlices)) {
+              return jsonResponse({ ok: false, error: 'enabledSlices must be an array' }, 400);
+            }
+            setAgentCoreFourOverride(db, {
+              roleId,
+              ...(body.modelTier !== undefined
+                ? { modelTier: body.modelTier as ModelTier | null }
+                : {}),
+              ...(body.provider !== undefined ? { provider: body.provider as string | null } : {}),
+              ...(body.modelId !== undefined ? { modelId: body.modelId as string | null } : {}),
+              ...(body.thinkingLevel !== undefined
+                ? { thinkingLevel: body.thinkingLevel as ThinkingLevel | null }
+                : {}),
+              ...(body.enabledSlices !== undefined
+                ? { enabledSlices: body.enabledSlices as HarnessSliceId[] }
+                : {}),
+              ...(body.extraInstructions !== undefined
+                ? { extraInstructions: body.extraInstructions as string | null }
+                : {}),
+              actorAgentId: 'operator',
+            });
+          }
+          broadcastEventsSince(beforeSeq);
+          return jsonResponse({ ok: true, role: buildRoleCoreFourState(roleId as AgentRoleId) });
+        } catch (err) {
+          return jsonResponse(
+            { ok: false, error: err instanceof Error ? err.message : String(err) },
+            400,
+          );
+        }
+      }
+
+      if (pathname === '/api/cron' && req.method === 'GET') {
+        const enabledOnly = url.searchParams.get('enabledOnly') === 'true';
+        return jsonResponse({
+          ok: true,
+          jobs: listCronJobs(db, enabledOnly ? { enabledOnly: true } : undefined),
+        });
+      }
+
+      if (pathname === '/api/cron' && req.method === 'POST') {
+        let body: {
+          name?: unknown;
+          schedule?: unknown;
+          prompt?: unknown;
+          roleId?: unknown;
+          enabled?: unknown;
+        };
+        try {
+          body = (await req.json()) as typeof body;
+        } catch {
+          return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+        }
+
+        if (
+          typeof body.name !== 'string' ||
+          typeof body.schedule !== 'string' ||
+          typeof body.prompt !== 'string'
+        ) {
+          return jsonResponse(
+            { ok: false, error: 'Fields "name", "schedule", and "prompt" must be strings' },
+            400,
+          );
+        }
+
+        try {
+          const beforeSeq = getLatestSeq();
+          const job = createCronJob(db, {
+            name: body.name,
+            schedule: body.schedule,
+            prompt: body.prompt,
+            roleId: typeof body.roleId === 'string' ? body.roleId : undefined,
+            enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+          });
+          broadcastEventsSince(beforeSeq);
+          return jsonResponse({ ok: true, job }, 201);
+        } catch (err) {
+          return jsonResponse(
+            { ok: false, error: err instanceof Error ? err.message : String(err) },
+            400,
+          );
+        }
+      }
+
+      const cronToggleMatch = /^\/api\/cron\/([^/]+)\/toggle$/.exec(pathname);
+      if (cronToggleMatch && req.method === 'POST') {
+        const id = decodeURIComponent(cronToggleMatch[1]!);
+        const existing = getCronJob(db, id);
+        if (!existing) {
+          return jsonResponse({ ok: false, error: `Cron job "${id}" not found` }, 404);
+        }
+
+        let body: { enabled?: unknown } = {};
+        const rawText = await req.text();
+        if (rawText.trim().length > 0) {
+          try {
+            body = JSON.parse(rawText) as { enabled?: unknown };
+          } catch {
+            return jsonResponse({ ok: false, error: 'Invalid JSON request body' }, 400);
+          }
+        }
+
+        const nextEnabled = typeof body.enabled === 'boolean' ? body.enabled : !existing.enabled;
+        const beforeSeq = getLatestSeq();
+        const job = setCronJobEnabled(db, id, nextEnabled);
+        if (!job) {
+          return jsonResponse({ ok: false, error: `Cron job "${id}" not found` }, 404);
+        }
+        broadcastEventsSince(beforeSeq);
+        return jsonResponse({ ok: true, job });
+      }
+
+      const cronRunMatch = /^\/api\/cron\/([^/]+)\/run$/.exec(pathname);
+      if (cronRunMatch && req.method === 'POST') {
+        const id = decodeURIComponent(cronRunMatch[1]!);
+        const existing = getCronJob(db, id);
+        if (!existing) {
+          return jsonResponse({ ok: false, error: `Cron job "${id}" not found` }, 404);
+        }
+        const job = await executeCronJob(existing);
+        return jsonResponse({ ok: true, job });
+      }
+
+      const cronItemMatch = /^\/api\/cron\/([^/]+)$/.exec(pathname);
+      if (cronItemMatch && req.method === 'DELETE') {
+        const id = decodeURIComponent(cronItemMatch[1]!);
+        const deleted = deleteCronJob(db, id);
+        if (!deleted) {
+          return jsonResponse({ ok: false, error: `Cron job "${id}" not found` }, 404);
+        }
+        emitEventAndBroadcast({
+          runId: id,
+          kind: 'cron',
+          payload: { action: 'delete', jobId: id },
+        });
+        return jsonResponse({ ok: true, deleted: true });
+      }
+
+      if (pathname === '/api/tool-summaries' && req.method === 'GET') {
+        const taskId = url.searchParams.get('taskId')?.trim() || undefined;
+        const agentId = url.searchParams.get('agentId')?.trim() || undefined;
+        const rawLimit = url.searchParams.get('limit')?.trim();
+        const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : undefined;
+        const limit =
+          parsedLimit !== undefined && Number.isFinite(parsedLimit) && parsedLimit > 0
+            ? Math.min(parsedLimit, 500)
+            : undefined;
+        return jsonResponse({
+          ok: true,
+          summaries: listToolSummaries(db, {
+            ...(taskId ? { taskId } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(limit !== undefined ? { limit } : {}),
+          }),
+        });
+      }
+
       if (pathname === '/api/meta/status' && req.method === 'GET') {
         return jsonResponse({
           ok: true,
@@ -674,7 +1020,16 @@ export function startCockpitServer(options: StartCockpitServerOptions): CockpitS
     },
     rotatePairingCode,
     broadcastEvent,
+    tickCronNow,
     async stop(): Promise<void> {
+      stopped = true;
+      if (cronTimer !== null) {
+        clearInterval(cronTimer);
+        cronTimer = null;
+      }
+      if (inFlightTick) {
+        await inFlightTick.catch(() => {});
+      }
       oauthManager.cancelAll();
       for (const sub of Array.from(subscribers)) {
         sub.close();

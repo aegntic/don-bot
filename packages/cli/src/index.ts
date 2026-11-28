@@ -28,19 +28,36 @@ import {
 } from '@don-bot/meta';
 import {
   BACKGROUND_CONTEXT,
+  createCronJob,
   createRollbackCheckpoint,
+  deleteCronJob,
   type DonConfig,
   type DonDatabase,
+  getAgentCoreFourOverride,
+  getBudgetSnapshot,
+  getCronJob,
+  getDefaultSlicesForRole,
   getOnboardingStatus,
+  type HarnessSliceId,
+  listAgentCoreFourOverrides,
+  listCronJobs,
   listDecisionCards,
   listRollbackCheckpoints,
   listSkillEvalRuns,
   loadDonConfig,
+  type ModelTier,
   openDonDb,
   openDonSpine,
+  recordCronJobRun,
   recordTurn,
+  resetAgentCoreFourOverride,
   resolveDecisionCard,
+  resolveEffectiveRoleModel,
   saveDonConfig,
+  setAgentCoreFourOverride,
+  setCronJobEnabled,
+  type ThinkingLevel,
+  toggleAgentHarnessSlice,
   VaultCredentialStore,
   writeDefaultDonConfig,
 } from '@don-bot/spine';
@@ -113,6 +130,8 @@ function renderHelp(): string {
     '  auth <status|set|logout>         Inspect, encrypt, or remove provider credentials in SQLite',
     '  run "<goal>"                     Execute single-lane task cleanly (bypasses debate room)',
     '  team "<goal>"                    Execute Lead + Specialist goal (complexity-gated debate room)',
+    '  cron <list|add|pause|resume|delete|run-now>  Manage durable scheduled cron prompts',
+    '  core-four <list|set|slice|reset> Inspect or tune per-role Core Four overrides',
     '  serve                            Start local A2UI v1.0 / SSE 3-pane cockpit server + pairing code',
     '  status                           Show SQLite WAL, safeagents, budget caps, queue & worktree status',
     '  resume                           Inspect paused/interrupted tasks, once() memos & Decision Deck cards',
@@ -133,6 +152,15 @@ function renderHelp(): string {
     '  --role <roleId>                  Override active role (lead|api-keeper|pipeline-forge|client-qa|memory-curator)',
     '  --worktree                       Run coding specialist in an isolated git worktree',
     '  --verify                         Run oxc code gate (oxlint/oxfmt/typecheck/tests) after completion',
+    '  --merge                          Commit verified worktree edits & merge via Writer Lease (implies --worktree --verify)',
+    '  --schedule <expr>                Cron schedule expression (@every 5m, @hourly, */15 * * * *)',
+    '  --prompt <text>                  Prompt text for cron job',
+    '  --id <jobId>                     Cron job ID override',
+    '  --tier <tier>                    Model tier (architect|workhorse|fast|gate) for core-four set',
+    '  --model <modelId>                Explicit model ID override for core-four set',
+    '  --thinking <level>               Thinking level (off|minimal|low|medium|high) for core-four set',
+    '  --slice <name>                   Harness slice ID for core-four slice toggle',
+    '  --enabled <true|false>           Boolean toggle for core-four slice',
     '  --provider <id>                  Provider ID for auth set/logout (openrouter|anthropic|openai|google|typesafe)',
     '  --key <secret>                   API key for auth set (never printed back; prompts masked if omitted in TTY)',
     '  --key-stdin                      Read API key from stdin without exposing it in process arguments',
@@ -233,6 +261,15 @@ export async function runCli(
       role: { type: 'string' },
       worktree: { type: 'boolean', default: false },
       verify: { type: 'boolean', default: false },
+      merge: { type: 'boolean', default: false },
+      schedule: { type: 'string' },
+      prompt: { type: 'string' },
+      id: { type: 'string' },
+      tier: { type: 'string' },
+      model: { type: 'string' },
+      thinking: { type: 'string' },
+      slice: { type: 'string' },
+      enabled: { type: 'string' },
       provider: { type: 'string' },
       key: { type: 'string' },
       'key-stdin': { type: 'boolean', default: false },
@@ -549,6 +586,7 @@ export async function runCli(
       role: command === 'run' ? (role ?? 'api-keeper') : role,
       worktree: Boolean(parsed.values.worktree),
       verifyCodeGate: Boolean(parsed.values.verify),
+      autoMerge: Boolean(parsed.values.merge),
       config:
         command === 'run'
           ? {
@@ -569,7 +607,21 @@ export async function runCli(
       ...(result.worktreePath
         ? [`  worktree:   ${result.worktreePath} (${result.worktreeBranch ?? 'detached'})`]
         : []),
+      ...(result.worktreeCommitSha ? [`  commit:     ${result.worktreeCommitSha}`] : []),
+      ...(result.mergeResult
+        ? [
+            `  merge:      ${result.mergeResult.merged ? `merged (${result.mergeResult.branch}${result.mergeResult.mergeCommit ? ` @ ${result.mergeResult.mergeCommit.slice(0, 8)}` : ''})` : `conflict (${result.mergeResult.conflictFiles.join(', ')})`}`,
+          ]
+        : []),
+      ...(result.specialistRuns && result.specialistRuns.length > 0
+        ? [
+            `  delegated:  ${result.specialistRuns.map((s) => `${s.roleId}[${s.status}${s.mergeResult?.merged ? ':merged' : ''}]`).join(', ')}`,
+          ]
+        : []),
       ...(result.toolCalls.length > 0 ? [`  tools:      ${result.toolCalls.join(', ')}`] : []),
+      ...(result.toolSummaries && result.toolSummaries.length > 0
+        ? [`  summaries:  ${result.toolSummaries.length} batch(es)`]
+        : []),
       `  budget:     taskUsd=$${result.budget.taskUsd.toFixed(4)} status=${result.budget.status}`,
       ...(result.codeGate
         ? [
@@ -582,9 +634,409 @@ export async function runCli(
       ...(result.assistantOutput ? [`  output:     ${result.assistantOutput}`] : []),
     ];
     emitResult(asJson, result, lines, out);
-    return result.status !== 'done' || (result.codeGate !== undefined && !result.codeGate.passed)
+    return result.status !== 'done' ||
+      (result.codeGate !== undefined && !result.codeGate.passed) ||
+      (result.mergeResult !== undefined && !result.mergeResult.merged)
       ? 1
       : 0;
+  }
+
+  if (command === 'cron') {
+    const action = rest[0] ?? 'list';
+
+    if (action === 'list') {
+      if (!existsSync(dbPath)) {
+        emitResult(asJson, { jobs: [] }, ['No cron jobs scheduled yet.'], out);
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const jobs = listCronJobs(db);
+        emitResult(
+          asJson,
+          { jobs },
+          jobs.length === 0
+            ? ['No cron jobs scheduled yet.']
+            : [
+                `Scheduled Cron Jobs (${jobs.length}):`,
+                ...jobs.map(
+                  (j) =>
+                    `  - ${j.id} [${j.enabled ? 'enabled' : 'paused'}] ${j.name} (${j.schedule}) role=${j.roleId} status=${j.lastStatus ?? 'idle'} next=${new Date(j.nextRunAt).toISOString()}`,
+                ),
+              ],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'add') {
+      const name = typeof parsed.values.name === 'string' ? parsed.values.name.trim() : '';
+      const schedule =
+        typeof parsed.values.schedule === 'string' ? parsed.values.schedule.trim() : '';
+      const prompt = typeof parsed.values.prompt === 'string' ? parsed.values.prompt.trim() : '';
+      if (!name || !schedule || !prompt) {
+        writeLine(
+          errOut,
+          'Usage: don cron add --name "<name>" --schedule "<expr>" --prompt "<prompt>" [--role <roleId>]',
+        );
+        return 2;
+      }
+      const initInfo = ensureWorkspaceInitialized(dir);
+      const db = openDonDb(initInfo.dbPath);
+      try {
+        const job = createCronJob(db, {
+          name,
+          schedule,
+          prompt,
+          roleId: role ?? 'lead',
+        });
+        emitResult(
+          asJson,
+          { ok: true, job },
+          [
+            `Created cron job ${job.id} (${job.name})`,
+            `  schedule: ${job.schedule} · role=${job.roleId}`,
+            `  nextRun:  ${new Date(job.nextRunAt).toISOString()}`,
+          ],
+          out,
+        );
+        return 0;
+      } catch (err) {
+        writeLine(errOut, err instanceof Error ? err.message : String(err));
+        return 2;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'pause' || action === 'resume') {
+      const jobId =
+        rest[1]?.trim() || (typeof parsed.values.id === 'string' ? parsed.values.id.trim() : '');
+      if (!jobId) {
+        writeLine(errOut, `Usage: don cron ${action} <jobId>`);
+        return 2;
+      }
+      if (!existsSync(dbPath)) {
+        writeLine(errOut, `Cron job "${jobId}" not found (workspace uninitialized).`);
+        return 1;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const updated = setCronJobEnabled(db, jobId, action === 'resume');
+        if (!updated) {
+          writeLine(errOut, `Cron job "${jobId}" not found.`);
+          return 1;
+        }
+        emitResult(
+          asJson,
+          { ok: true, job: updated },
+          [`${updated.enabled ? 'Resumed' : 'Paused'} cron job ${updated.id} (${updated.name})`],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'delete') {
+      const jobId =
+        rest[1]?.trim() || (typeof parsed.values.id === 'string' ? parsed.values.id.trim() : '');
+      if (!jobId) {
+        writeLine(errOut, 'Usage: don cron delete <jobId>');
+        return 2;
+      }
+      if (!existsSync(dbPath)) {
+        writeLine(errOut, `Cron job "${jobId}" not found (workspace uninitialized).`);
+        return 1;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const deleted = deleteCronJob(db, jobId);
+        if (!deleted) {
+          writeLine(errOut, `Cron job "${jobId}" not found.`);
+          return 1;
+        }
+        emitResult(asJson, { ok: true, id: jobId, deleted: true }, [`Deleted ${jobId}`], out);
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'run-now') {
+      const jobId =
+        rest[1]?.trim() || (typeof parsed.values.id === 'string' ? parsed.values.id.trim() : '');
+      if (!jobId) {
+        writeLine(errOut, 'Usage: don cron run-now <jobId> [--faux]');
+        return 2;
+      }
+      if (!existsSync(dbPath)) {
+        writeLine(errOut, `Cron job "${jobId}" not found (workspace uninitialized).`);
+        return 1;
+      }
+      const config = loadDonConfig(dir);
+      const db = openDonDb(dbPath);
+      let job: ReturnType<typeof getCronJob>;
+      try {
+        job = getCronJob(db, jobId);
+        if (!job) {
+          writeLine(errOut, `Cron job "${jobId}" not found.`);
+          return 1;
+        }
+        const budget = getBudgetSnapshot(db, config, { taskId: job.id });
+        if (budget.status === 'exceeded' || budget.dailyUsd >= config.budgets.dailyMaxUsd) {
+          const paused = recordCronJobRun(
+            db,
+            job.id,
+            'budget_paused',
+            'Paused: daily budget cap reached',
+          );
+          emitResult(
+            asJson,
+            { ok: false, job: paused },
+            [`Cron job ${job.id} paused: daily budget cap reached.`],
+            out,
+          );
+          return 1;
+        }
+      } finally {
+        db.close();
+      }
+
+      const targetRole = VALID_ROLES.includes(job.roleId as AgentRoleId)
+        ? (job.roleId as AgentRoleId)
+        : 'lead';
+      const runRes = await runTeamGoal({
+        dir,
+        goal: job.prompt,
+        faux: useFaux,
+        role: targetRole,
+        worktree: Boolean(parsed.values.worktree),
+        verifyCodeGate: Boolean(parsed.values.verify),
+        autoMerge: Boolean(parsed.values.merge),
+        config,
+      });
+
+      const dbAfter = openDonDb(dbPath);
+      try {
+        const finalJob = recordCronJobRun(
+          dbAfter,
+          job.id,
+          runRes.status === 'done' ? 'done' : 'failed',
+          runRes.summary,
+        );
+        emitResult(
+          asJson,
+          { ok: runRes.status === 'done', job: finalJob, run: runRes },
+          [
+            `Executed cron job ${job.id} (${job.name}) -> [${runRes.status}]`,
+            `  summary: ${runRes.summary}`,
+          ],
+          out,
+        );
+        return runRes.status === 'done' ? 0 : 1;
+      } finally {
+        dbAfter.close();
+      }
+    }
+
+    writeLine(
+      errOut,
+      `Unknown cron subcommand "${action}". Expected: list, add, pause, resume, delete, run-now`,
+    );
+    return 2;
+  }
+
+  if (command === 'core-four') {
+    const action = rest[0] ?? 'list';
+    const config = loadDonConfig(dir);
+
+    if (action === 'list') {
+      const db = existsSync(dbPath) ? openDonDb(dbPath) : null;
+      try {
+        const overrides = db ? listAgentCoreFourOverrides(db) : [];
+        const overrideMap = new Map(overrides.map((o) => [o.roleId, o]));
+        const roles = VALID_ROLES.map((roleId) => {
+          const profile = DEFAULT_ROSTER[roleId];
+          const override = overrideMap.get(roleId) ?? null;
+          const resolved = db
+            ? resolveEffectiveRoleModel(db, config, roleId, profile.modelTier, { faux: useFaux })
+            : {
+                provider: config.models[profile.modelTier].provider,
+                modelId: config.models[profile.modelTier].model,
+                thinking: config.models[profile.modelTier].thinking,
+                credentialSource: 'config' as const,
+              };
+          return {
+            roleId,
+            title: profile.title,
+            canWriteCode: profile.canWriteCode,
+            defaultTier: profile.modelTier,
+            effectiveTier: override?.modelTier ?? profile.modelTier,
+            provider: resolved.provider,
+            modelId: resolved.modelId,
+            thinkingLevel: override?.thinkingLevel ?? String(resolved.thinking),
+            enabledSlices: override?.enabledSlices ?? getDefaultSlicesForRole(roleId),
+            overridden: Boolean(override),
+          };
+        });
+        emitResult(
+          asJson,
+          { roles },
+          [
+            `Agent Core Four Roster (${roles.length} roles):`,
+            ...roles.map(
+              (r) =>
+                `  - ${r.roleId} [tier=${r.effectiveTier}, model=${r.provider}/${r.modelId}, thinking=${r.thinkingLevel}] slices=[${r.enabledSlices.join(',')}]${r.overridden ? ' *custom' : ''}`,
+            ),
+          ],
+          out,
+        );
+        return 0;
+      } finally {
+        db?.close();
+      }
+    }
+
+    if (action === 'set') {
+      const targetRole = role ?? parseRoleFlag(rest[1]);
+      if (!targetRole || targetRole === 'invalid') {
+        writeLine(
+          errOut,
+          `Usage: don core-four set --role <${VALID_ROLES.join('|')}> [--tier <t>] [--provider <p>] [--model <m>] [--thinking <lvl>]`,
+        );
+        return 2;
+      }
+      const initInfo = ensureWorkspaceInitialized(dir);
+      const db = openDonDb(initInfo.dbPath);
+      try {
+        const tier =
+          typeof parsed.values.tier === 'string' && parsed.values.tier.trim()
+            ? (parsed.values.tier.trim() as ModelTier)
+            : undefined;
+        const provider =
+          typeof parsed.values.provider === 'string' && parsed.values.provider.trim()
+            ? parsed.values.provider.trim()
+            : undefined;
+        const modelId =
+          typeof parsed.values.model === 'string' && parsed.values.model.trim()
+            ? parsed.values.model.trim()
+            : undefined;
+        const thinkingLevel =
+          typeof parsed.values.thinking === 'string' && parsed.values.thinking.trim()
+            ? (parsed.values.thinking.trim() as ThinkingLevel)
+            : undefined;
+        const updated = setAgentCoreFourOverride(db, {
+          roleId: targetRole,
+          modelTier: tier,
+          provider,
+          modelId,
+          thinkingLevel,
+          actorAgentId: 'cli-operator',
+        });
+        emitResult(
+          asJson,
+          { ok: true, override: updated },
+          [
+            `Updated Core Four for "${targetRole}": tier=${updated.modelTier ?? 'default'} provider=${updated.provider ?? 'default'} model=${updated.modelId ?? 'default'} thinking=${updated.thinkingLevel ?? 'default'}`,
+          ],
+          out,
+        );
+        return 0;
+      } catch (err) {
+        writeLine(errOut, err instanceof Error ? err.message : String(err));
+        return 2;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'slice') {
+      const targetRole = role ?? parseRoleFlag(rest[1]);
+      const sliceName = typeof parsed.values.slice === 'string' ? parsed.values.slice.trim() : '';
+      const rawEnabled =
+        typeof parsed.values.enabled === 'string' ? parsed.values.enabled.trim().toLowerCase() : '';
+      if (
+        !targetRole ||
+        targetRole === 'invalid' ||
+        !sliceName ||
+        (rawEnabled !== 'true' && rawEnabled !== 'false')
+      ) {
+        writeLine(
+          errOut,
+          'Usage: don core-four slice --role <roleId> --slice <slice> --enabled <true|false>',
+        );
+        return 2;
+      }
+      const initInfo = ensureWorkspaceInitialized(dir);
+      const db = openDonDb(initInfo.dbPath);
+      try {
+        const updated = toggleAgentHarnessSlice(
+          db,
+          targetRole,
+          sliceName as HarnessSliceId,
+          rawEnabled === 'true',
+          'cli-operator',
+        );
+        emitResult(
+          asJson,
+          { ok: true, override: updated },
+          [`Updated slices for "${targetRole}": [${updated.enabledSlices.join(', ')}]`],
+          out,
+        );
+        return 0;
+      } catch (err) {
+        writeLine(errOut, err instanceof Error ? err.message : String(err));
+        return 2;
+      } finally {
+        db.close();
+      }
+    }
+
+    if (action === 'reset') {
+      const targetRole = role ?? parseRoleFlag(rest[1]);
+      if (!targetRole || targetRole === 'invalid') {
+        writeLine(errOut, `Usage: don core-four reset --role <${VALID_ROLES.join('|')}>`);
+        return 2;
+      }
+      if (!existsSync(dbPath)) {
+        emitResult(
+          asJson,
+          { ok: true, roleId: targetRole, reset: false },
+          ['No overrides saved.'],
+          out,
+        );
+        return 0;
+      }
+      const db = openDonDb(dbPath);
+      try {
+        const existing = getAgentCoreFourOverride(db, targetRole);
+        const reset = existing ? resetAgentCoreFourOverride(db, targetRole) : false;
+        emitResult(
+          asJson,
+          { ok: true, roleId: targetRole, reset },
+          [
+            reset
+              ? `Reset Core Four override for "${targetRole}".`
+              : `No override for "${targetRole}".`,
+          ],
+          out,
+        );
+        return 0;
+      } finally {
+        db.close();
+      }
+    }
+
+    writeLine(
+      errOut,
+      `Unknown core-four subcommand "${action}". Expected: list, set, slice, reset`,
+    );
+    return 2;
   }
 
   if (command === 'resume') {

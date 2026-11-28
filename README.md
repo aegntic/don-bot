@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/aegntic/don-bot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aegntic/don-bot/ci.yml?branch=main&style=flat-square&color=ff5a1f&labelColor=0d1015&label=CI" alt="CI Status" /></a>
-  <a href="https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.2"><img src="https://img.shields.io/badge/pre--release-v0.6.0--rc.2-ff5a1f?style=flat-square&labelColor=0d1015" alt="Pre-Release v0.6.0-rc.2" /></a>
+  <a href="https://github.com/aegntic/don-bot/releases/tag/v0.6.0-rc.3"><img src="https://img.shields.io/badge/pre--release-v0.6.0--rc.3-ff5a1f?style=flat-square&labelColor=0d1015" alt="Pre-Release v0.6.0-rc.3" /></a>
   <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4%20%C2%B7%20TypeScript-3fc1ff?style=flat-square&labelColor=0d1015&logo=bun&logoColor=white" alt="Bun and TypeScript" />
   <img src="https://img.shields.io/badge/Rust-don--guard-ff5a1f?style=flat-square&labelColor=0d1015&logo=rust&logoColor=white" alt="Rust don-guard" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-64748b?style=flat-square&labelColor=0d1015" alt="Apache-2.0 License" /></a>
@@ -22,11 +22,11 @@
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
-│                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 2                  │
+│                  D O N - B O T   ·   v 0 . 6 . 0 - r c . 3                  │
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────────────┤
-│   6 WORKSPACES  │   1 RUST CRATE  │    87 TESTS     │   $0.00 FAUX VERIFIED   │
-│  spine · trust  │    don-guard    │  78 Bun + 9 RS  │    13 Chaos Proofs +    │
-│  team · ui · …  │ AES-GCM · bwrap │  813 Expects    │   10 Co-located Suites  │
+│   6 WORKSPACES  │   1 RUST CRATE  │    108 TESTS    │   $0.00 FAUX VERIFIED   │
+│  spine · trust  │    don-guard    │  99 Bun + 9 RS  │    13 Chaos Proofs +    │
+│  team · ui · …  │ AES-GCM · bwrap │  1106 Expects   │    31 Bun Test Files    │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────────────┘
 ```
 
@@ -127,11 +127,14 @@ Every subsystem below is self-contained, strictly typed, and covered by offline 
 git clone https://github.com/aegntic/don-bot.git don-bot
 cd don-bot
 
-# Build & verify the native Rust security boundary
+# Option A: Install prebuilt cross-platform don-guard binary (Linux x64 / macOS arm64 & x64) into ~/.don/bin
+curl -fsSL https://raw.githubusercontent.com/aegntic/don-bot/main/scripts/install.sh | sh
+
+# Option B: Build & verify the native Rust security boundary from source
 cargo test --manifest-path crates/don-guard/Cargo.toml
 cargo build --release --manifest-path crates/don-guard/Cargo.toml
 
-# Install dependencies & run the full CI gate (typecheck + oxlint + oxfmt + 69 Bun tests + SIGKILL crash proof)
+# Install dependencies & run the full CI gate (typecheck + oxlint + oxfmt + 99 Bun tests + SIGKILL crash proof)
 bun install
 bun run check
 bun run test:crash
@@ -168,9 +171,11 @@ bun run don team "Add healthcheck endpoint and unit test" --dir /path/to/your-re
 | `don init [--dir <path>]` | Create `.don/factory.sqlite` (WAL), `.don/config.yaml`, `.don/access-key`, and `.don/.gitignore` |
 | `don onboard [--dir <path>] [--non-interactive]` | Guided setup for OAuth AI brain (`openrouter`/`claude`/`chatgpt`/`copilot`), System-One Jev & Telegram Blind Vault |
 | `don login [provider] [--dir <path>]` | Run built-in OAuth PKCE / Device Code sign-in (`openrouter` default unlocks AI + Jev) |
-| `don auth <status\|set\|logout>` | Inspect, encrypt into SQLite, or remove provider credentials without echoing secrets |
-| `don run "<goal>" [--faux] [--role <id>]` | Run a single-lane task directly without opening a debate room |
-| `don team "<goal>" [--faux] [--role <id>]` | Run complexity-gated Lead + Specialist orchestration (`api-keeper`, `pipeline-forge`, `client-qa`, `memory-curator`) |
+| `don auth <status\|set\|logout>` | Inspect, encrypt into SQLite (`--key-stdin` supported), or remove provider credentials without echoing secrets |
+| `don run "<goal>" [--faux] [--role <id>] [--worktree] [--verify] [--merge]` | Run a single-lane task directly without opening a debate room |
+| `don team "<goal>" [--faux] [--role <id>] [--worktree] [--verify] [--merge]` | Run Lead + delegated Specialist worktree orchestration, verify code gate, and merge cleanly via Writer Lease |
+| `don cron <list\|add\|pause\|resume\|delete\|run-now>` | Create, toggle, inspect, and execute durable SQLite-backed scheduled prompts (with daily budget cap guards) |
+| `don core-four <list\|set\|slice\|reset>` | Tune per-role Model/Tier, Thinking, Harness Slices, and Extra Instructions while keeping non-coding Lead invariants |
 | `don status [--dir <path>]` | Report SQLite WAL status, `safeagents` guard mode, budget caps, queue counts, and active worktrees |
 | `don serve [--port <n>] [--host <addr>]` | Start the authenticated A2UI `v1.0` / SSE 3-pane Liquid PWA Cockpit server (`127.0.0.1:4321`) + short `DON-XXXXXX` pairing code |
 | `don resume [--dir <path>]` | Inspect paused/interrupted tasks, incomplete `once()` memos, blocked cooldowns, and Decision Deck cards |
@@ -215,7 +220,7 @@ bun run don skills harness --dir /path/to/your-repo
 | **Slice 03** | Rust `crates/don-guard` native OS sandbox + `trust-jev` owner-quote calibration & Blind Vault | **Complete (`main`)** |
 | **Slice 04** | Telegram MTProto (`@mtcute/bun@0.32.8`, zero C++ builds) operator channel (`packages/channels`) | **Complete (`main`)** |
 | **Slice 05** | **A2UI 1.0** Custom Catalog (`don.catalog.v1`) + TypeScript Macro Hydration + 3-Pane PWA Cockpit (`packages/ui`) | **Complete (`main`)** |
-| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`v0.6.0-rc.2` · `main`)** |
+| **Slice 06** | **Meta-Factory Fleet (`packages/meta`)**: blank templates, SkillEvaluator backports, 1:1 `FactoryOwner` & Jev-gated mailbox | **Complete (`v0.6.0-rc.3` · `main`)** |
 
 <details>
 <summary>Don-Bot Architecture Visual Overview</summary>

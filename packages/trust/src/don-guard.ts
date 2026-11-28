@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   createSandbox,
   type SandboxExecOptions,
@@ -59,6 +60,8 @@ export function detectDonGuardBinary(overridePath?: string | null): string | nul
 
   const exe = process.platform === 'win32' ? 'don-guard.exe' : 'don-guard';
   const candidates = [
+    resolve(process.cwd(), '.don', 'bin', exe),
+    join(homedir(), '.don', 'bin', exe),
     resolve(WORKSPACE_ROOT, 'crates/don-guard/target/release', exe),
     resolve(WORKSPACE_ROOT, 'crates/don-guard/target/debug', exe),
   ];

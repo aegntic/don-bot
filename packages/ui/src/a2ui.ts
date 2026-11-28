@@ -11,7 +11,10 @@ export type A2UIComponentType =
   | 'RunTimeline'
   | 'OutcomeReceipt'
   | 'FactoryCard'
-  | 'FactoryChangelogCard';
+  | 'FactoryChangelogCard'
+  | 'CoreFourCard'
+  | 'CronJobCard'
+  | 'ToolSummaryCard';
 
 export type A2UIPropKind = 'string' | 'number' | 'boolean' | 'array' | 'stringOrNull';
 
@@ -135,6 +138,44 @@ export const DON_CATALOG_SPECS: Readonly<Record<A2UIComponentType, DonCatalogCom
       diffSummary: 'string',
     },
     allowedActions: ['changelog.view_diff', 'changelog.rollback'],
+  },
+  CoreFourCard: {
+    requiredProps: {
+      roleId: 'string',
+      title: 'string',
+      modelTier: 'string',
+      provider: 'string',
+      modelId: 'string',
+      thinkingLevel: 'string',
+      canWriteCode: 'boolean',
+      enabledSlices: 'array',
+    },
+    allowedActions: ['core_four.update', 'core_four.toggle_slice'],
+  },
+  CronJobCard: {
+    requiredProps: {
+      jobId: 'string',
+      name: 'string',
+      schedule: 'string',
+      roleId: 'string',
+      enabled: 'boolean',
+      nextRunAt: 'number',
+      lastStatus: 'stringOrNull',
+    },
+    allowedActions: ['cron.toggle', 'cron.run_now', 'cron.delete'],
+  },
+  ToolSummaryCard: {
+    requiredProps: {
+      summaryId: 'string',
+      taskId: 'string',
+      agentId: 'string',
+      batchIndex: 'number',
+      toolCount: 'number',
+      tools: 'array',
+      summary: 'string',
+      createdAt: 'number',
+    },
+    allowedActions: ['timeline.inspect'],
   },
 };
 

@@ -17,6 +17,9 @@ export type DonEventKind =
   | 'channel'
   | 'rollback'
   | 'meta'
+  | 'cron'
+  | 'tool_summary'
+  | 'core_four'
   | 'system';
 
 export interface DonEventRecord {

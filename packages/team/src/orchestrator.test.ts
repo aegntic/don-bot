@@ -1,17 +1,31 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createCodingTools,
   createReadTool,
   defineExtension,
+  fauxAssistantMessage,
+  fauxToolCall,
+  getAgentCoreFourOverride,
+  listCronJobs,
+  listToolSummaries,
   openDonDb,
   openDonSpine,
 } from '@don-bot/spine';
 import { runCodeGate } from './code-gate.ts';
 import { runTeamGoal } from './orchestrator.ts';
+import { commitWorktreeChanges } from './worktree.ts';
 
 const tempDirs: string[] = [];
 
@@ -247,5 +261,292 @@ describe('packages/team/src/orchestrator', () => {
     const linkedCrateTarget = join(wtRes.worktreePath!, 'crates', 'don-guard', 'target');
     expect(existsSync(linkedCrateTarget)).toBe(true);
     expect(lstatSync(linkedCrateTarget).isSymbolicLink()).toBe(true);
+  });
+
+  test('multi-lane don team delegates via delegate_to_specialist and posts specialist result into roomMessages', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'don-orch-delegate-'));
+    tempDirs.push(repoDir);
+    initGitRepo(repoDir);
+
+    const res = await runTeamGoal({
+      dir: repoDir,
+      goal: 'Implement API endpoint and CI pipeline verification',
+      faux: true,
+      worktree: true,
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.activeRole).toBe('lead');
+    expect(res.complexity.shouldOpenRoom).toBe(true);
+    expect(res.roomId).toBeDefined();
+    expect(res.toolCalls).toContain('delegate_to_specialist');
+    expect(res.toolCalls).toContain('record_lane_handoff');
+    expect(res.specialistRuns).toBeDefined();
+    expect(res.specialistRuns!.length).toBe(1);
+
+    const delegated = res.specialistRuns![0]!;
+    expect(delegated.roleId).toBe('api-keeper');
+    expect(delegated.status).toBe('done');
+    expect(delegated.worktreeBranch).toBe(`don/${delegated.taskId}/api-keeper`);
+    expect(existsSync(delegated.worktreePath!)).toBe(true);
+
+    const specialistMsg = res.roomMessages.find(
+      (m) => m.senderId === 'api-keeper' && m.body.includes(delegated.taskId),
+    );
+    expect(specialistMsg).toBeDefined();
+    expect(specialistMsg!.body).toContain(delegated.worktreeBranch!);
+  });
+
+  test('autoMerge commits modified files while excluding .don and node_modules, merges under Writer Lease, cleans up worktree, and never pushes to origin', async () => {
+    const remoteDir = mkdtempSync(join(tmpdir(), 'don-orch-remote-'));
+    const repoDir = mkdtempSync(join(tmpdir(), 'don-orch-automerge-'));
+    tempDirs.push(remoteDir, repoDir);
+
+    const initBare = spawnSync('git', ['init', '--bare', '-b', 'main'], {
+      cwd: remoteDir,
+      encoding: 'utf8',
+    });
+    if (initBare.status !== 0) throw new Error(initBare.stderr);
+
+    initGitRepo(repoDir);
+    const runGit = (args: readonly string[], cwd = repoDir) => {
+      const r = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+        cwd,
+        encoding: 'utf8',
+      });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+
+    runGit(['remote', 'add', 'origin', remoteDir]);
+    runGit(['push', '-u', 'origin', 'main']);
+    const initialOriginSha = runGit(['rev-parse', 'refs/heads/main'], remoteDir);
+
+    // Create shared dependencies without .gitignore so symlinked deps would be dirty unless excluded.
+    mkdirSync(join(repoDir, 'node_modules', 'shared-dep'), { recursive: true });
+    writeFileSync(
+      join(repoDir, 'node_modules', 'shared-dep', 'index.js'),
+      'module.exports = 1;\n',
+      'utf8',
+    );
+    mkdirSync(join(repoDir, 'packages', 'spine', 'node_modules', 'pkg-dep'), { recursive: true });
+    writeFileSync(
+      join(repoDir, 'packages', 'spine', 'index.ts'),
+      'export const spine = 1;\n',
+      'utf8',
+    );
+    mkdirSync(join(repoDir, 'crates', 'don-guard', 'target', 'debug'), { recursive: true });
+    writeFileSync(
+      join(repoDir, 'crates', 'don-guard', 'Cargo.toml'),
+      '[package]\nname="don-guard"\n',
+      'utf8',
+    );
+    runGit(['add', 'packages/spine/index.ts', 'crates/don-guard/Cargo.toml']);
+    runGit(['commit', '-m', 'add workspace skeleton']);
+    runGit(['push', 'origin', 'main']);
+    const preRunOriginSha = runGit(['rev-parse', 'refs/heads/main'], remoteDir);
+    expect(preRunOriginSha).not.toBe(initialOriginSha);
+
+    const res = await runTeamGoal({
+      dir: repoDir,
+      goal: 'Create feature module and merge cleanly',
+      faux: true,
+      role: 'api-keeper',
+      autoMerge: true,
+      fauxResponses: [
+        fauxAssistantMessage(
+          fauxToolCall('write', {
+            path: 'src/feature.ts',
+            content: 'export const featureValue = 42;\n',
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('write', {
+            path: '.don/ephemeral-scratch.txt',
+            content: 'should never be staged\n',
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Wrote src/feature.ts cleanly.'),
+      ],
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.codeGate?.passed).toBe(true);
+    expect(res.worktreeCommitSha).toBeDefined();
+    expect(res.mergeResult?.merged).toBe(true);
+    expect(res.mergeResult?.mergeCommit).toBeDefined();
+    expect(existsSync(res.worktreePath!)).toBe(false);
+    expect(existsSync(join(repoDir, 'src', 'feature.ts'))).toBe(true);
+    expect(readFileSync(join(repoDir, 'src', 'feature.ts'), 'utf8')).toBe(
+      'export const featureValue = 42;\n',
+    );
+
+    const committedFiles = runGit(['show', '--pretty=', '--name-only', res.worktreeCommitSha!]);
+    expect(committedFiles.split(/\r?\n/)).toEqual(['src/feature.ts']);
+    expect(committedFiles).not.toContain('.don');
+    expect(committedFiles).not.toContain('node_modules');
+    expect(committedFiles).not.toContain('target');
+
+    // Verify no auto-push to origin occurred.
+    const postRunOriginSha = runGit(['rev-parse', 'refs/heads/main'], remoteDir);
+    expect(postRunOriginSha).toBe(preRunOriginSha);
+
+    // Also verify commitWorktreeChanges returns committed=false when only excluded paths are dirty.
+    writeFileSync(join(repoDir, 'node_modules', 'extra.js'), 'export default 1;\n', 'utf8');
+    const noopCommit = commitWorktreeChanges(repoDir, 'should not commit');
+    expect(noopCommit.committed).toBe(false);
+    expect(noopCommit.changedFiles).toEqual([]);
+  });
+
+  test('Core Four and Cron tools enforce non-coding safety invariant and persist overrides', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'don-orch-core4-'));
+    tempDirs.push(workDir);
+
+    const res = await runTeamGoal({
+      dir: workDir,
+      goal: 'Configure specialist Core Four overrides and verify safety checks',
+      faux: true,
+      role: 'lead',
+      delegateSpecialists: false,
+      fauxResponses: [
+        fauxAssistantMessage(fauxToolCall('inspect_team_core_four', {}), { stopReason: 'toolUse' }),
+        fauxAssistantMessage(
+          fauxToolCall('toggle_harness_slice', {
+            roleId: 'lead',
+            slice: 'coding',
+            enabled: true,
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('toggle_harness_slice', {
+            roleId: 'memory-curator',
+            slice: 'coding',
+            enabled: true,
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('configure_agent_core_four', {
+            roleId: 'api-keeper',
+            modelTier: 'architect',
+            thinkingLevel: 'high',
+            extraInstructions: 'Always preserve WAL guarantees.',
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('schedule_cron_job', {
+            name: 'nightly-audit',
+            schedule: '@daily',
+            prompt: 'Run workspace audit',
+            roleId: 'client-qa',
+          }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Core Four and cron configuration verified.'),
+      ],
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.toolCalls).toEqual([
+      'inspect_team_core_four',
+      'toggle_harness_slice',
+      'toggle_harness_slice',
+      'configure_agent_core_four',
+      'schedule_cron_job',
+    ]);
+
+    const db = openDonDb(join(workDir, '.don', 'factory.sqlite'));
+    try {
+      expect(getAgentCoreFourOverride(db, 'lead')).toBeNull();
+      expect(getAgentCoreFourOverride(db, 'memory-curator')).toBeNull();
+      const apiOverride = getAgentCoreFourOverride(db, 'api-keeper');
+      expect(apiOverride).not.toBeNull();
+      expect(apiOverride!.modelTier).toBe('architect');
+      expect(apiOverride!.thinkingLevel).toBe('high');
+      expect(apiOverride!.extraInstructions).toBe('Always preserve WAL guarantees.');
+
+      const jobs = listCronJobs(db);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0]!.name).toBe('nightly-audit');
+      expect(jobs[0]!.roleId).toBe('client-qa');
+
+      // Simulate corrupted DB row granting 'coding' to lead; lead must still NEVER get coding tools.
+      db.raw
+        .prepare(
+          `INSERT INTO don_agent_overrides (
+             role_id, model_tier, provider, model_id, thinking_level, enabled_slices_json, extra_instructions, updated_at
+           ) VALUES ('lead', NULL, NULL, NULL, NULL, ?, NULL, ?)`,
+        )
+        .run(JSON.stringify(['read', 'coding', 'core_four']), Date.now());
+    } finally {
+      db.close();
+    }
+
+    const tamperedLead = await runTeamGoal({
+      dir: workDir,
+      goal: 'Attempt write tool as lead after DB tampering',
+      faux: true,
+      role: 'lead',
+      delegateSpecialists: false,
+      fauxResponses: [
+        fauxAssistantMessage(fauxToolCall('write', { path: 'pwned.txt', content: 'nope' }), {
+          stopReason: 'toolUse',
+        }),
+        fauxAssistantMessage('Checked tool availability.'),
+      ],
+    });
+
+    expect(existsSync(join(workDir, 'pwned.txt'))).toBe(false);
+    expect(tamperedLead.toolSummaries?.some((s) => s.summary.includes('1 failed'))).toBe(true);
+  });
+
+  test('BatchToolSummarizer records batch summaries into toolSummaries and don_tool_summaries', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'don-orch-tsum-'));
+    tempDirs.push(workDir);
+
+    const res = await runTeamGoal({
+      dir: workDir,
+      goal: 'Run multiple handoff notes to trigger batch tool summarization',
+      faux: true,
+      role: 'api-keeper',
+      toolSummaryBatchSize: 2,
+      fauxResponses: [
+        fauxAssistantMessage(
+          fauxToolCall('record_lane_handoff', { lane: 'api-keeper', note: 'step 1' }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('record_lane_handoff', { lane: 'api-keeper', note: 'step 2' }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage(
+          fauxToolCall('record_lane_handoff', { lane: 'api-keeper', note: 'step 3' }),
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Finished 3 tool calls.'),
+      ],
+    });
+
+    expect(res.status).toBe('done');
+    expect(res.toolSummaries).toBeDefined();
+    expect(res.toolSummaries!.length).toBe(2);
+    expect(res.toolSummaries![0]!.batchIndex).toBe(0);
+    expect(res.toolSummaries![0]!.toolCount).toBe(2);
+    expect(res.toolSummaries![1]!.batchIndex).toBe(1);
+    expect(res.toolSummaries![1]!.toolCount).toBe(1);
+
+    const db = openDonDb(join(workDir, '.don', 'factory.sqlite'));
+    try {
+      const persisted = listToolSummaries(db, { taskId: res.taskId });
+      expect(persisted.length).toBe(2);
+      expect(persisted[0]!.summary).toContain('Ran 2 tools');
+      expect(persisted[1]!.summary).toContain('Ran 1 tool');
+    } finally {
+      db.close();
+    }
   });
 });

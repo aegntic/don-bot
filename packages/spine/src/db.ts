@@ -300,6 +300,46 @@ CREATE TABLE IF NOT EXISTS don_factory_mailbox (
   read_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_don_factory_mailbox_to ON don_factory_mailbox(to_factory, status, created_at);
+
+CREATE TABLE IF NOT EXISTS don_agent_overrides (
+  role_id TEXT PRIMARY KEY,
+  model_tier TEXT,
+  provider TEXT,
+  model_id TEXT,
+  thinking_level TEXT,
+  enabled_slices_json TEXT NOT NULL,
+  extra_instructions TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS don_cron_jobs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  role_id TEXT NOT NULL DEFAULT 'lead',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run_at INTEGER,
+  next_run_at INTEGER NOT NULL,
+  last_status TEXT,
+  last_summary TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_don_cron_next ON don_cron_jobs(enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS don_tool_summaries (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  batch_index INTEGER NOT NULL,
+  tool_count INTEGER NOT NULL,
+  tools_json TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_don_tool_summaries_task ON don_tool_summaries(task_id, created_at);
 `;
 
 export class DonDatabase {

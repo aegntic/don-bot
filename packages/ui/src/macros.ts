@@ -4,10 +4,15 @@ import { resolve } from 'node:path';
 import { listChangelogs, listFactories } from '@don-bot/meta';
 import {
   getBudgetSnapshot,
+  getDefaultSlicesForRole,
+  listAgentCoreFourOverrides,
+  listCronJobs,
   listDecisionCards,
   listSkillEvalRuns,
+  listToolSummaries,
   openDonDb,
   readEventsAfter,
+  resolveEffectiveRoleModel,
   type DecisionCard,
   type DonConfig,
   type DonDatabase,
@@ -15,7 +20,7 @@ import {
   type DonEventRecord,
   type SkillEvalRecord,
 } from '@don-bot/spine';
-import { listSpecialistWorktrees, type ListedWorktree } from '@don-bot/team';
+import { DEFAULT_ROSTER, listSpecialistWorktrees, type ListedWorktree } from '@don-bot/team';
 import {
   A2UI_VERSION,
   DON_CATALOG_ID,
@@ -679,6 +684,91 @@ export function buildHydratedCockpitSurface(
       { id: 'run.stop_turn', label: 'Emergency Stop', payload: { taskId } },
     ],
   });
+
+  const coreFourOverrides = new Map(
+    listAgentCoreFourOverrides(db).map((override) => [override.roleId, override] as const),
+  );
+  for (const profile of Object.values(DEFAULT_ROSTER)) {
+    const override = coreFourOverrides.get(profile.id);
+    const effective = resolveEffectiveRoleModel(db, config, profile.id, profile.modelTier);
+    const effectiveTier = override?.modelTier ?? profile.modelTier;
+    const enabledSlices = override?.enabledSlices
+      ? [...override.enabledSlices]
+      : getDefaultSlicesForRole(profile.id);
+
+    components.push({
+      id: `core-four-${profile.id}`,
+      component: 'CoreFourCard',
+      props: {
+        roleId: profile.id,
+        title: profile.title,
+        modelTier: effectiveTier,
+        provider: effective.provider,
+        modelId: effective.modelId,
+        thinkingLevel: effective.thinking,
+        canWriteCode: profile.canWriteCode,
+        enabledSlices,
+        extraInstructions: override?.extraInstructions ?? null,
+      },
+      actions: [
+        { id: 'core_four.update', label: 'Update Model', payload: { roleId: profile.id } },
+        { id: 'core_four.toggle_slice', label: 'Toggle Slice', payload: { roleId: profile.id } },
+      ],
+    });
+  }
+
+  for (const job of listCronJobs(db).slice(0, 20)) {
+    components.push({
+      id: `cron-${job.id}`,
+      component: 'CronJobCard',
+      props: {
+        jobId: job.id,
+        name: job.name,
+        schedule: job.schedule,
+        roleId: job.roleId,
+        enabled: job.enabled,
+        nextRunAt: job.nextRunAt,
+        lastStatus: job.lastStatus,
+        lastSummary: job.lastSummary,
+        lastRunAt: job.lastRunAt,
+        prompt: job.prompt,
+      },
+      actions: [
+        {
+          id: 'cron.toggle',
+          label: job.enabled ? 'Pause' : 'Resume',
+          payload: { jobId: job.id, enabled: !job.enabled },
+        },
+        { id: 'cron.run_now', label: 'Run Now', payload: { jobId: job.id } },
+        { id: 'cron.delete', label: 'Delete', payload: { jobId: job.id } },
+      ],
+    });
+  }
+
+  for (const summary of listToolSummaries(db, { limit: 6 })) {
+    components.push({
+      id: `tool-summary-${summary.id}`,
+      component: 'ToolSummaryCard',
+      props: {
+        summaryId: summary.id,
+        taskId: summary.taskId,
+        agentId: summary.agentId,
+        batchIndex: summary.batchIndex,
+        toolCount: summary.toolCount,
+        tools: [...summary.tools],
+        summary: summary.summary,
+        createdAt: summary.createdAt,
+        runId: summary.runId,
+      },
+      actions: [
+        {
+          id: 'timeline.inspect',
+          label: 'Inspect Batch',
+          payload: { summaryId: summary.id, taskId: summary.taskId },
+        },
+      ],
+    });
+  }
 
   const envelope: A2UISurfaceEnvelope = {
     a2uiVersion: A2UI_VERSION,

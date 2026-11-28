@@ -174,6 +174,8 @@ export async function openDonSpine(options: OpenDonSpineOptions): Promise<DonSpi
     'list_files',
     'record_lane_handoff',
     'evaluate_skill',
+    'inspect_team_core_four',
+    'list_cron_jobs',
     ...(options.readOnlyTools ?? []),
   ]);
 

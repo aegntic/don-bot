@@ -52,6 +52,12 @@ export interface MergeWorktreeResult {
   readonly error?: string;
 }
 
+export interface CommitWorktreeResult {
+  readonly committed: boolean;
+  readonly commitSha?: string;
+  readonly changedFiles: readonly string[];
+}
+
 interface GitResult {
   readonly status: number;
   readonly stdout: string;
@@ -367,6 +373,113 @@ export function gcWorktrees(
 
   runGit(['worktree', 'prune'], resolvedRepo);
   return { pruned, removedPaths, removedBranches };
+}
+
+function normalizePorcelainPath(raw: string): string {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) {
+    cleaned = cleaned.slice(1, -1).replace(/\\(["\\])/g, '$1');
+  }
+  return cleaned.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function parsePorcelainStatusLine(line: string): string | null {
+  if (line.length < 4) return null;
+  const rawPayload = line.slice(3);
+  const isRenameOrCopy = line[0] === 'R' || line[0] === 'C' || line[1] === 'R' || line[1] === 'C';
+  const arrowIdx = isRenameOrCopy ? rawPayload.indexOf(' -> ') : -1;
+  const pathPart = arrowIdx >= 0 ? rawPayload.slice(arrowIdx + 4) : rawPayload;
+  const normalized = normalizePorcelainPath(pathPart);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isExcludedWorktreePath(relPath: string): boolean {
+  const normalized = relPath.replace(/\/+$/, '');
+  if (normalized === '.don' || normalized.startsWith('.don/')) return true;
+  if (
+    normalized === 'node_modules' ||
+    normalized.startsWith('node_modules/') ||
+    normalized.includes('/node_modules/') ||
+    normalized.endsWith('/node_modules')
+  ) {
+    return true;
+  }
+  if (/^crates\/[^/]+\/target(?:\/|$)/.test(normalized)) return true;
+  return false;
+}
+
+/**
+ * Stage and commit dirty worktree changes while excluding `.don/`, `node_modules/`, and `crates/<crate>/target/`.
+ */
+export function commitWorktreeChanges(worktreePath: string, message: string): CommitWorktreeResult {
+  const resolvedPath = resolve(worktreePath);
+  const statusRes = runGit(['status', '--porcelain', '-uall'], resolvedPath);
+  if (statusRes.status !== 0) {
+    throw new Error(
+      `git status --porcelain failed in "${resolvedPath}": ${statusRes.stderr.trim() || statusRes.stdout.trim()}`,
+    );
+  }
+
+  const changedFiles: string[] = [];
+  const seen = new Set<string>();
+  for (const line of statusRes.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const relPath = parsePorcelainStatusLine(line);
+    if (!relPath || isExcludedWorktreePath(relPath)) continue;
+    if (!seen.has(relPath)) {
+      seen.add(relPath);
+      changedFiles.push(relPath);
+    }
+  }
+
+  if (changedFiles.length === 0) {
+    return { committed: false, changedFiles: [] };
+  }
+
+  const addRes = runGit(['add', '--', ...changedFiles], resolvedPath);
+  if (addRes.status !== 0) {
+    throw new Error(
+      `git add failed in "${resolvedPath}": ${addRes.stderr.trim() || addRes.stdout.trim()}`,
+    );
+  }
+
+  const cachedDiff = runGit(['diff', '--cached', '--quiet'], resolvedPath);
+  if (cachedDiff.status === 0) {
+    return { committed: false, changedFiles: [] };
+  }
+
+  const commitRes = runGit(
+    [
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'user.name=Don-Bot Specialist',
+      '-c',
+      'user.email=don-bot@local',
+      'commit',
+      '-m',
+      message,
+    ],
+    resolvedPath,
+  );
+  if (commitRes.status !== 0) {
+    throw new Error(
+      `git commit failed in "${resolvedPath}": ${commitRes.stderr.trim() || commitRes.stdout.trim()}`,
+    );
+  }
+
+  const shaRes = runGit(['rev-parse', 'HEAD'], resolvedPath);
+  if (shaRes.status !== 0) {
+    throw new Error(
+      `git rev-parse HEAD failed in "${resolvedPath}": ${shaRes.stderr.trim() || shaRes.stdout.trim()}`,
+    );
+  }
+
+  return {
+    committed: true,
+    commitSha: shaRes.stdout.trim(),
+    changedFiles,
+  };
 }
 
 export interface MergeWorktreeOptions {

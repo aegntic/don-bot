@@ -116,8 +116,11 @@ describe('don CLI commands', () => {
     git(['config', 'user.name', 'Don CLI Test'], repoDir);
     git(['config', 'user.email', 'don-cli@local.invalid'], repoDir);
     git(['config', 'commit.gpgsign', 'false'], repoDir);
+    writeFileSync(join(repoDir, '.gitignore'), '.don/\n', 'utf8');
     writeFileSync(join(repoDir, 'README.md'), '# Repo\n', 'utf8');
-    git(['add', 'README.md'], repoDir);
+    mkdirSync(join(repoDir, 'src'), { recursive: true });
+    writeFileSync(join(repoDir, 'src', 'health.ts'), 'export const healthy = true;\n', 'utf8');
+    git(['add', '.gitignore', 'README.md', 'src/health.ts'], repoDir);
     git(['commit', '-m', 'init'], repoDir);
 
     const wt = createSpecialistWorktree(repoDir, {
@@ -229,5 +232,132 @@ describe('don CLI commands', () => {
     const badSubcmd = await captureCli(['skills', 'unknown-op', '--dir', workDir]);
     expect(badSubcmd.code).toBe(2);
     expect(badSubcmd.stderr).toContain('Unknown skills subcommand');
+  });
+
+  test('cron and core-four commands persist state and enforce non-coding safety invariants', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'don-cli-parity-'));
+    tempDirs.push(workDir);
+
+    const initRes = await captureCli(['init', '--dir', workDir]);
+    expect(initRes.code).toBe(0);
+
+    const addCron = await captureCli([
+      'cron',
+      'add',
+      '--dir',
+      workDir,
+      '--name',
+      'nightly-health',
+      '--schedule',
+      '@every 15m',
+      '--prompt',
+      'Audit health',
+      '--role',
+      'memory-curator',
+      '--json',
+    ]);
+    expect(addCron.code).toBe(0);
+    const createdJob = JSON.parse(addCron.stdout).job as { id: string; enabled: boolean };
+    expect(createdJob.id).toContain('cron-');
+    expect(createdJob.enabled).toBe(true);
+
+    const listCron = await captureCli(['cron', 'list', '--dir', workDir]);
+    expect(listCron.code).toBe(0);
+    expect(listCron.stdout).toContain('nightly-health');
+
+    const pauseCron = await captureCli(['cron', 'pause', createdJob.id, '--dir', workDir]);
+    expect(pauseCron.code).toBe(0);
+    expect(pauseCron.stdout).toContain('Paused');
+
+    const resumeCron = await captureCli(['cron', 'resume', createdJob.id, '--dir', workDir]);
+    expect(resumeCron.code).toBe(0);
+    expect(resumeCron.stdout).toContain('Resumed');
+
+    const runCron = await captureCli([
+      'cron',
+      'run-now',
+      createdJob.id,
+      '--dir',
+      workDir,
+      '--faux',
+    ]);
+    expect(runCron.code).toBe(0);
+    expect(runCron.stdout).toContain('[done]');
+
+    const delCron = await captureCli(['cron', 'delete', createdJob.id, '--dir', workDir]);
+    expect(delCron.code).toBe(0);
+
+    const setCoreFour = await captureCli([
+      'core-four',
+      'set',
+      '--dir',
+      workDir,
+      '--role',
+      'api-keeper',
+      '--tier',
+      'architect',
+      '--thinking',
+      'high',
+    ]);
+    expect(setCoreFour.code).toBe(0);
+    expect(setCoreFour.stdout).toContain('tier=architect');
+
+    const listCoreFour = await captureCli(['core-four', 'list', '--dir', workDir]);
+    expect(listCoreFour.code).toBe(0);
+    expect(listCoreFour.stdout).toContain('thinking=high');
+
+    const blockedSlice = await captureCli([
+      'core-four',
+      'slice',
+      '--dir',
+      workDir,
+      '--role',
+      'lead',
+      '--slice',
+      'coding',
+      '--enabled',
+      'true',
+    ]);
+    expect(blockedSlice.code).toBe(2);
+    expect(blockedSlice.stderr).toContain('non-coding');
+
+    const resetCoreFour = await captureCli([
+      'core-four',
+      'reset',
+      '--dir',
+      workDir,
+      '--role',
+      'api-keeper',
+    ]);
+    expect(resetCoreFour.code).toBe(0);
+    expect(resetCoreFour.stdout).toContain('Reset Core Four override');
+  });
+
+  test('team --faux --merge delegates, verifies, merges cleanly, and prunes worktrees', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'don-cli-merge-'));
+    tempDirs.push(repoDir);
+    git(['init', '-b', 'main'], repoDir);
+    git(['config', 'user.name', 'Don CLI Merge Test'], repoDir);
+    git(['config', 'user.email', 'don-merge@local.invalid'], repoDir);
+    git(['config', 'commit.gpgsign', 'false'], repoDir);
+    writeFileSync(join(repoDir, '.gitignore'), '.don/\n', 'utf8');
+    writeFileSync(join(repoDir, 'README.md'), '# Repo\n', 'utf8');
+    mkdirSync(join(repoDir, 'src'), { recursive: true });
+    writeFileSync(join(repoDir, 'src', 'health.ts'), 'export const healthy = true;\n', 'utf8');
+    git(['add', '.gitignore', 'README.md', 'src/health.ts'], repoDir);
+    git(['commit', '-m', 'init'], repoDir);
+
+    const teamMergeRes = await captureCli([
+      'team',
+      'Add healthcheck endpoint and unit test',
+      '--dir',
+      repoDir,
+      '--faux',
+      '--merge',
+    ]);
+    expect(teamMergeRes.code).toBe(0);
+    expect(teamMergeRes.stdout).toContain('[done]');
+    expect(teamMergeRes.stdout).toContain('delegated:');
+    expect(listSpecialistWorktrees(repoDir).filter((w) => w.managed).length).toBe(0);
   });
 });
