@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-label="Don-Bot 5-Layer Fail-Closed Security Boundary Architecture">
+  <defs>
+    <linearGradient id="secBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#090c11"/>
+      <stop offset="100%" stop-color="#0e141f"/>
+    </linearGradient>
+    <marker id="arrSec" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#ff5a1f"/>
+    </marker>
+    <marker id="arrAllow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#3fc1ff"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="540" rx="18" fill="url(#secBg)" stroke="#243144" stroke-width="1.5"/>
+  <text x="40" y="42" fill="#ff5a1f" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" font-weight="700" letter-spacing="2">03 // THREAT MODEL · FAIL-CLOSED DEFENSE-IN-DEPTH</text>
+  <text x="40" y="70" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="23" font-weight="700">Five Security Boundaries Between Untrusted Inputs and Your Host</text>
+
+  <!-- Stacked Security Layers -->
+  <rect x="40" y="96" width="760" height="76" rx="11" fill="#141b27" stroke="#ff5a1f" stroke-opacity="0.8"/>
+  <text x="60" y="120" fill="#ff8a4c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">LAYER 1 · DETERMINISTIC FIREWALL &amp; SSRF (safeagents.ts · ssrf.ts)</text>
+  <text x="60" y="144" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="700">Blocks undeclared tools, .env exfil, 100.64.0.0/10, 169.254.0.0/16, ::ffff:*, NAT64 64:ff9b::/96</text>
+  <text x="60" y="162" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">Enforcer: inspectToolCallDeterministic() + assertPublicUrl() before execute</text>
+
+  <rect x="40" y="182" width="760" height="76" rx="11" fill="#141b27" stroke="#ff5a1f" stroke-opacity="0.65"/>
+  <text x="60" y="206" fill="#ff8a4c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">LAYER 2 · NATIVE RUST don-guard WORKER (crates/don-guard v0.6.0)</text>
+  <text x="60" y="230" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="700">Zeroizing AES-256-GCM Blind Vault, Luhn PAN rejection, bwrap namespaces, env_clear()</text>
+  <text x="60" y="248" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">IPC JSON protocol · Secrets never enter JS heap · Stdout masked [REDACTED:VAULT]</text>
+
+  <rect x="40" y="268" width="760" height="76" rx="11" fill="#141b27" stroke="#3fc1ff" stroke-opacity="0.7"/>
+  <text x="60" y="292" fill="#3fc1ff" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">LAYER 3 · SYSTEM-ONE JEV &amp; 45-FEATURE GBDT (trust-jev.ts · jev-client.ts)</text>
+  <text x="60" y="316" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="700">24h Shadow Mode, canonical payload hashes, owner-turn proof, 1500ms fail-closed timeout</text>
+  <text x="60" y="334" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">Gates mutating tools, team routing, Verifier stop checks, FTS5 memory, and Telegram outbound</text>
+
+  <rect x="40" y="354" width="760" height="76" rx="11" fill="#141b27" stroke="#3fc1ff" stroke-opacity="0.55"/>
+  <text x="60" y="378" fill="#3fc1ff" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">LAYER 4 · PROMPT ISOLATION, A2UI SANITIZER &amp; ACCESS KEY</text>
+  <text x="60" y="402" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="700">&lt;untrusted_tool_result&gt; breakout escaping · Strict don.catalog.v1 · sandbox=&quot;allow-scripts&quot;</text>
+  <text x="60" y="420" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">Every /api/*, SSE, and mailbox route requires timing-safe .don/access-key bearer auth</text>
+
+  <rect x="40" y="440" width="760" height="76" rx="11" fill="#141b27" stroke="#2a364a"/>
+  <text x="60" y="464" fill="#8edcff" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">LAYER 5 · SKILL EVALUATOR, LIQUID BOUNDARY &amp; NON-CODING ROLE LOCK</text>
+  <text x="60" y="488" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="14" font-weight="700">Blocks Unicode U+E0000 smuggling, Meta edits to UI/Rust, and coding slice on Lead/Curator</text>
+  <text x="60" y="506" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">Enforcers: runSkillEvaluator() + assertLiquidBoundary() + NON_CODING_ROLE_IDS guard</text>
+
+  <!-- Right Panel: Verdict Routing -->
+  <rect x="830" y="96" width="330" height="420" rx="14" fill="#141b27" stroke="#2a364a" stroke-width="1.2"/>
+  <text x="854" y="126" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="16" font-weight="700">Fail-Closed Verdict Routing</text>
+  <text x="854" y="146" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11">Every blocked or uncertain call halts cleanly</text>
+
+  <rect x="854" y="168" width="282" height="86" rx="10" fill="#090c11" stroke="#3fc1ff"/>
+  <text x="872" y="192" fill="#3fc1ff" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">ALLOW / REPLAY (always_allow)</text>
+  <text x="872" y="214" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="13">Payload hash + active owner turn</text>
+  <text x="872" y="232" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10.5">Executes in sandbox; scrubs stdout keys</text>
+
+  <rect x="854" y="274" width="282" height="96" rx="10" fill="#090c11" stroke="#ff5a1f"/>
+  <text x="872" y="298" fill="#ff8a4c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">ESCALATE (always_ask / timeout)</text>
+  <text x="872" y="320" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="13">Opens idempotent DecisionCard</text>
+  <text x="872" y="338" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10">Owner approves: Cockpit / CLI / TG</text>
+  <text x="872" y="355" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10">Recorded with turnId provenance</text>
+
+  <rect x="854" y="390" width="282" height="104" rx="10" fill="#090c11" stroke="#ff5a1f" stroke-width="1.5"/>
+  <text x="872" y="414" fill="#ff5a1f" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" font-weight="700">HARD DENY (always_deny / block)</text>
+  <text x="872" y="436" fill="#f3f5f9" font-family="Inter, -apple-system, sans-serif" font-size="13">Tool call aborted pre-execution</text>
+  <text x="872" y="454" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10.5">Emits GuardAlert to A2UI Cockpit SSE</text>
+  <text x="872" y="472" fill="#9aa7bc" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10.5">Secrets never echoed in logs or errors</text>
+
+  <line x1="800" y1="211" x2="848" y2="211" stroke="#3fc1ff" stroke-width="1.8" marker-end="url(#arrAllow)"/>
+  <line x1="800" y1="320" x2="848" y2="320" stroke="#ff5a1f" stroke-width="1.8" marker-end="url(#arrSec)"/>
+  <line x1="800" y1="442" x2="848" y2="442" stroke="#ff5a1f" stroke-width="1.8" marker-end="url(#arrSec)"/>
+</svg>

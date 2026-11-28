@@ -1,6 +1,14 @@
 # Don-Bot Architecture Deep Dive
 
-Don-Bot is structured as a 6-package TypeScript/Bun monorepo (`packages/*`) paired with a standalone Rust security binary (`crates/don-guard`), backed by a single SQLite WAL file (`.don/factory.sqlite`) and isolated per-specialist `git worktree` checkouts.
+<p align="center">
+  <img src="../assets/card-02-architecture-16x9.png" alt="Don-Bot 4-Layer Architecture Overview" width="100%" />
+</p>
+
+Don-Bot is structured as a 6-package TypeScript/Bun monorepo (`packages/*` plus `packages/cli`) paired with a standalone native Rust security binary (`crates/don-guard` `v0.6.0`), backed by a single SQLite WAL database (`.don/factory.sqlite`) and isolated per-specialist `git worktree` checkouts.
+
+![Don-Bot System Topology](../assets/diagrams/system-topology.svg)
+
+> See [`WORKFLOWS.md`](./WORKFLOWS.md) for visual end-to-end onboarding, delegation, Core Four, Cron, and Meta-Factory flowmaps.
 
 ---
 
@@ -8,72 +16,127 @@ Don-Bot is structured as a 6-package TypeScript/Bun monorepo (`packages/*`) pair
 
 Don-Bot wraps `@earendil-works/pi-durable`, `@earendil-works/chord`, and Bun's native `node:sqlite` (`DatabaseSync`) in WAL mode:
 
-- **Idempotent Side Effects (`once()` — [`packages/spine/src/events.ts`](../packages/spine/src/events.ts)):**
-  - Before invoking an external side effect, `once(db, { memoKey, runId, replay }, fn)` atomically inspects `don_once_memos` inside a SQLite transaction.
-  - Completed keys (`status = 'done'`) return `{ status: 'replayed', value }` without re-executing `fn()`.
-  - If `SIGKILL` terminates the worker while `status = 'running'` and `replay = 'unsafe'`, restarting against the same WAL database marks the memo `'interrupted'`, records an audit event, and returns `InterruptedToolMessage` so the agent does not blindly duplicate external effects.
-- **Turn Lock & Cancellation ([`packages/spine/src/turn-lock.ts`](../packages/spine/src/turn-lock.ts)):** `withTurnLock` and `withdrawTurn` ensure late or aborted owner turns fail closed across memory writes, outbound messages, and `DecisionCard` execution.
-- **Compaction & Context Discipline ([`packages/spine/src/compact.ts`](../packages/spine/src/compact.ts)):** Tracks context window consumption at `10%` notice, `20%` warning, and `30%` forced lock where only `self_compact({ note_to_self })` is permitted until handoff completes.
-- **Budget Circuit Breakers ([`packages/spine/src/budget.ts`](../packages/spine/src/budget.ts)):** Enforces `don_usage_ledger` spend caps (`$0.25` subagent, `70%` fast-tier downshift on `$2.00` task budget, `$15.00` daily cap), opening idempotent `budget_limit` `DecisionCard`s when crossed.
-- **Time-Travel Checkpoints & Signed Rollbacks ([`packages/spine/src/replay.ts`](../packages/spine/src/replay.ts) · [`packages/spine/src/rollback.ts`](../packages/spine/src/rollback.ts)):** Captures step snapshots (`forkRunFromStep`) and HMAC-SHA256 signed git refs (`refs/don/rollbacks/rb-*`) tied to `don_events.seq`.
+- **Idempotent Side Effects (`once()` — [`events.ts`](../packages/spine/src/events.ts)):** Before invoking an external side effect, `once(db, { memoKey, runId, replay }, fn)` atomically inspects `don_once_memos` inside a SQLite transaction. Completed keys replay cached outputs; interrupted `unsafe` runs emit `InterruptedToolMessage` so restarts never duplicate side effects.
+- **Turn Lock & Cancellation ([`turn-lock.ts`](../packages/spine/src/turn-lock.ts)):** `withTurnLock` and `withdrawTurn` ensure late or aborted owner turns fail closed across memory writes, outbound messages, and `DecisionCard` execution.
+- **Compaction & Spend Circuit Breakers ([`compact.ts`](../packages/spine/src/compact.ts) · [`budget.ts`](../packages/spine/src/budget.ts)):** Enforces `10% / 20% / 30%` forced `self_compact` handoffs alongside `$0.25` subagent, `$2.00` task (`70%` fast-tier downshift), and `$15.00` daily spend caps.
+- **Time-Travel Checkpoints & Signed Rollbacks ([`replay.ts`](../packages/spine/src/replay.ts) · [`rollback.ts`](../packages/spine/src/rollback.ts)):** Captures step snapshots (`forkRunFromStep`) and HMAC-SHA256 signed git refs (`refs/don/rollbacks/rb-*`) anchored to `don_events.seq`.
+- **Core Four Overrides ([`core-four.ts`](../packages/spine/src/core-four.ts)):** Persists per-role `modelTier`, `provider`, `modelId`, `thinkingLevel`, `enabledSlices`, and `extraInstructions` in `don_agent_overrides` while enforcing fail-closed `NON_CODING_ROLE_IDS` (`lead`, `memory-curator`).
+- **Durable Cron Scheduler ([`cron.ts`](../packages/spine/src/cron.ts)):** Stores scheduled prompts in `don_cron_jobs` (`@every`, `@hourly`, `@daily`, and 5-field schedules) and uses transactional `claimDueCronJobs()` to prevent double firing across restarts.
+- **Batch Tool Summarizer ([`tool-summarizer.ts`](../packages/spine/src/tool-summarizer.ts)):** Buffers tool calls (`ToolTask.afterTool`) and flushes secret-scrubbed <=2-line plain-English summaries every `3` calls into `don_tool_summaries` and `'tool_summary'` WAL events.
+
+### 1.1 SQLite WAL Schema Relationships
+
+```mermaid
+erDiagram
+  don_turns ||--o{ don_memory_entries : "anchors verbatim quotes"
+  don_turns ||--o{ don_decision_deck : "resolves with turnId"
+  don_events }o--|| don_rollbacks : "marks checkpoint seq"
+  don_once_memos }o--|| don_events : "audits execution/interrupt"
+  don_rooms ||--o{ don_room_messages : "bounds 3-round debate"
+  don_agent_overrides }o--|| don_events : "logs core_four changes"
+  don_cron_jobs }o--|| don_events : "logs cron runs & budget_paused"
+  don_tool_summaries }o--|| don_events : "emits tool_summary batch"
+  don_meta_templates ||--o{ don_meta_factories : "instantiates"
+  don_meta_factories ||--|| don_meta_owners : "assigns 1-to-1 steward"
+```
+
+### 1.2 Crash Replay & Durable Cron Lifecycles
+
+```mermaid
+stateDiagram-v2
+  [*] --> Running : "once() inserts status=running"
+  Running --> Done : "Side effect succeeds + cached JSON"
+  Done --> Replayed : "Restart hits memoKey (0 re-executions)"
+  Running --> Interrupted : "SIGKILL crash before commit (replay=unsafe)"
+  Interrupted --> Escalated : "Returns InterruptedToolMessage to agent"
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle : "createCronJob() computes next_run_at"
+  Idle --> ClaimedRunning : "claimDueCronJobs() updates next_run_at atomically"
+  ClaimedRunning --> Done : "Execution finished"
+  ClaimedRunning --> Failed : "Execution failed"
+  ClaimedRunning --> BudgetPaused : "dailyUsd >= dailyMaxUsd"
+  Done --> Idle : "Next schedule window"
+  BudgetPaused --> Idle : "Cap raised or new day"
+```
+
+### 1.3 Budget Circuit Breakers & Context Compaction Thresholds
+
+```mermaid
+xychart-beta
+  title "Task Budget Escalation Curve (USD Cap = $2.00)"
+  x-axis ["0%", "25%", "50%", "70% Downshift", "85%", "100% Cap"]
+  y-axis "Cumulative Spend (USD)" 0 --> 2.2
+  bar [0.0, 0.50, 1.00, 1.40, 1.70, 2.00]
+  line [0.0, 0.50, 1.00, 1.40, 1.70, 2.00]
+```
+
+| Guard Mechanism | Thresholds | Action Taken |
+| :--- | :--- | :--- |
+| **Context Window Compaction** | `10%` notice · `20%` warning · `30%` lock | Blocks non-compact tools until `self_compact({ note_to_self })` |
+| **Subagent Circuit Breaker** | `$0.25` USD / `5 min` | Aborts runaway child run cleanly |
+| **Task Spend Breaker** | `70%` (`$1.40`) downshift · `100%` (`$2.00`) halt | Switches tier to `fast`, then opens idempotent `budget_limit` `DecisionCard` |
+| **Daily Spend Breaker** | `$15.00` USD | Blocks live tool execution and pauses background Cron jobs (`budget_paused`) |
 
 ---
 
 ## 2. Hybrid Trust Boundary (`packages/trust` & `crates/don-guard`)
 
-Don-Bot isolates security-critical primitives away from agent control flow:
+Don-Bot isolates security-critical primitives outside agent and JS control flow:
 
-### 2.1 Rust Security Worker (`crates/don-guard`)
-
-Compiled binary [`crates/don-guard/src/main.rs`](../crates/don-guard/src/main.rs) serves 5 stdin/stdout JSON operations:
-
-| Operation | Rust Module | Responsibility |
+| Component | Source | Responsibilities |
 | :--- | :--- | :--- |
-| `health` | [`sandbox.rs`](../crates/don-guard/src/sandbox.rs) | Reports active backend (`linux-bwrap-scrubbed` vs `linux-scrubbed-subprocess` / OS equivalent) |
-| `ssrf-check` | [`ssrf.rs`](../crates/don-guard/src/ssrf.rs) | Rejects internal hostnames, loopback, RFC1918, Tailscale CGNAT (`100.64.0.0/10`), metadata (`169.254.0.0/16`), IPv6 ULA/link-local, IPv4-mapped IPv6, and NAT64 (`64:ff9b::/96`) |
-| `vault-seal` / `vault-open` | [`vault.rs`](../crates/don-guard/src/vault.rs) | Performs `AES-256-GCM` encryption with `Zeroizing` key/plaintext buffers, JSON AAD binding (`[refId, name, kind]`), and Luhn credit-card PAN rejection |
-| `exec` | [`sandbox.rs`](../crates/don-guard/src/sandbox.rs) | Runs `env_clear()` child processes (inside `bwrap` namespaces when permitted on Linux), enforces hard deadlines, and redacts secrets from stdout/stderr (`[REDACTED:VAULT]`) |
-
-### 2.2 System-One Jev Calibrated Gates (`packages/trust`)
-
-[`packages/trust/src/jev-client.ts`](../packages/trust/src/jev-client.ts) and [`packages/trust/src/trust-jev.ts`](../packages/trust/src/trust-jev.ts) integrate decision-modality APIs (`typesafe/jev-1.14` over OpenRouter, TypeSafe `jev-1.14.0`, or deterministic offline `createFauxJevClient`) with the ported 45-feature GBDT ensemble ([`packages/trust/src/trust-jev-model.json`](../packages/trust/src/trust-jev-model.json)):
-
-1. **Tool Gate (`ToolTask.beforeTool`):** Enforces 24h Shadow Mode calibration on unseen mutating tools, verifies canonical JSON payload hashes for `always_allow`, validates active owner quotes (`quotedTurnId`), and fails closed after `1500 ms` timeouts or low confidence (`< 0.85`).
-2. **Team Complexity Routing:** Routes simple tasks directly or escalates multi-lane tasks into 3-round `@mention` debate rooms.
-3. **Top-Down Stop Verification:** Confirms diff & checks satisfy the goal without scope creep before completing a task.
-4. **Memory Promotion Filter:** Guards long-term FTS5 memory persistence against unanchored rules.
-5. **External Outbound Firewall:** Screens external Telegram and cross-factory mutating mailbox requests before delivery.
-
-### 2.3 Skill Supply-Chain Evaluator ([`packages/trust/src/skill-evaluator.ts`](../packages/trust/src/skill-evaluator.ts))
-
-Evaluates `SKILL.md` artifacts before workspace installation or Meta-Factory backporting — checking YAML schema, PII leaks, secret patterns, Unicode tag smuggling (`U+E0000` range), shell injection heuristics, and 6 target agent harnesses — storing signed verdicts in `don_skill_evals`. Automatically upgrades to Python `skillevaluator` CLI when installed.
+| **Rust Security Worker (`v0.6.0`)** | [`crates/don-guard/src/main.rs`](../crates/don-guard/src/main.rs) | Cross-platform JSON IPC worker: `health`, `ssrf-check` (RFC1918, `100.64.0.0/10`, `169.254.0.0/16`, NAT64), `Zeroizing` AES-256-GCM Blind Vault (`vault.rs`, rejects Luhn PANs), `env_clear()` + Linux `bwrap` execution + `[REDACTED:VAULT]` masking (`sandbox.rs`) |
+| **System-One Jev + GBDT** | [`jev-client.ts`](../packages/trust/src/jev-client.ts) · [`trust-jev.ts`](../packages/trust/src/trust-jev.ts) | Combines decision models (`typesafe/jev-1.14`, OpenRouter, or deterministic faux) with the 45-feature GBDT ensemble across 5 gates (`ToolTask`, Complexity Router, Verifier Stop, Memory Promotion, Outbound Firewall) |
+| **NVIDIA SkillEvaluator** | [`skill-evaluator.ts`](../packages/trust/src/skill-evaluator.ts) | Scans `SKILL.md` for YAML schema, PII, secrets, Unicode tag smuggling (`U+E0000`), and 6-harness compatibility before install or template backport |
 
 ---
 
-## 3. Worktree Team & Top-Down Verification (`packages/team`)
+## 3. Worktree Team, Delegation & Writer Lease (`packages/team`)
 
-[`packages/team/src/orchestrator.ts`](../packages/team/src/orchestrator.ts) models a strict separation of duties:
+![Don-Bot Multi-Agent Worktree Delegation and Writer Lease Merge Flow](../assets/diagrams/multi-agent-merge-flow.svg)
 
-- **Roster (`canWriteCode=false` on Lead):** One Lead orchestrator routes tasks and owns the Decision Deck while four specialized builders (`api-keeper`, `pipeline-forge`, `client-qa`, `memory-curator`) work inside isolated `.don/worktrees/<task>-<role>` checkouts.
-- **Debate Rooms & `@mention` Social Contract ([`packages/team/src/rooms.ts`](../packages/team/src/rooms.ts)):** Multi-lane tasks hold bounded `max_rounds = 3` discussions in SQLite before touching files.
-- **Serialized `WriterLease` & `oxc.rs` Code Gate ([`packages/team/src/writer-lease.ts`](../packages/team/src/writer-lease.ts) · [`packages/team/src/code-gate.ts`](../packages/team/src/code-gate.ts)):** Merges back to the integration branch acquire an atomic SQLite lock and run `oxlint`, `oxfmt --check`, `tsc`, and `bun test`.
-- **Top-Down Verifier & Dead-Letter Cooldown ([`packages/team/src/verifier.ts`](../packages/team/src/verifier.ts) · [`packages/team/src/cooldown.ts`](../packages/team/src/cooldown.ts)):** Validates atomic file/content claims + semantic Jev checks; after `2` execution failures or `3` verifier loops, moves the task to `blocked_needs_human` with a `dead_letter_cooldown` DecisionCard.
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Op as Operator CLI
+  participant Lead as Lead Orchestrator (canWriteCode=false)
+  participant Spec as Specialist (.don/worktrees/task-role)
+  participant Gate as oxc.rs + SkillEvaluator
+  participant Lease as WriterLease (.don/writer.lease.json)
+
+  Op->>Lead: don team "<goal>" --merge
+  Lead->>Lead: Open 3-round SQLite @mention room
+  Lead->>Spec: delegate_to_specialist (isolated DB + CodingTools)
+  Spec->>Spec: Edit files in isolated worktree (shared node_modules & target symlinks)
+  Spec->>Gate: Run SkillGate + CodeGate (oxlint, oxfmt, tsc, bun test)
+  alt CodeGate fails and verifierLoops < maxVerifierLoops
+    Gate-->>Spec: Send stderr failure + oxfmt hint
+    Spec->>Gate: Repair and re-verify
+  end
+  Spec->>Spec: commitWorktreeChanges() (ignores .don/, node_modules, target/)
+  Spec->>Lease: acquire lease -> mergeWorktreeIntoMain(cleanupOnSuccess=true)
+  Lease-->>Lead: Merged clean on target branch + worktree pruned (git push blocked)
+  Lead->>Lead: closeRoom() + BatchToolSummarizer flush
+  Lead-->>Op: Return taskId, mergeCommit, specialistRuns & budget
+```
 
 ---
 
-## 4. A2UI `v1.0` Cockpit, CDP Screencast & Telegram "Me" Mode (`packages/ui` · `packages/channels`)
+## 4. A2UI `v1.0` Cockpit, `~` Switcher & Telegram (`packages/ui` · `packages/channels`)
 
-- **Strict Custom Catalog ([`packages/ui/src/a2ui.ts`](../packages/ui/src/a2ui.ts)):** Agents cannot emit raw HTML/JS/CSS. Only `don.catalog.v1` JSON envelopes (`DecisionCard`, `BudgetGauge`, `CodeGateCard`, `SkillEvalCard`, `WorktreeLane`, `GuardAlert`, `RunTimeline`, `OutcomeReceipt`, `FactoryCard`, `FactoryChangelogCard`) pass `validateA2UISurface`.
-- **$0.00-Token Macro Expander & SSE Stream ([`packages/ui/src/macros.ts`](../packages/ui/src/macros.ts) · [`packages/ui/src/server.ts`](../packages/ui/src/server.ts)):** Hydrates compact agent macro calls server-side from SQLite and pushes `dataModelUpdate` patches over authenticated SSE streams keyed by monotonic `events.seq`.
-- **Headless Chromium CDP Screencast ([`packages/ui/src/cdp-stream.ts`](../packages/ui/src/cdp-stream.ts)):** Captures on-demand browser verification frames with `handbackAt` human takeover arbitration.
-- **Telegram MTProto "Me" Mode ([`packages/channels/src/telegram.ts`](../packages/channels/src/telegram.ts) · [`packages/channels/src/firewall.ts`](../packages/channels/src/firewall.ts)):** Uses pure-JS/Bun `@mtcute/bun` (zero native C++ compilation), enforces `EXCLUSIONS.txt`, forbids forced `inviteToChannel`, and gates external messages on owner quotes or `👍` reactions in Saved Messages.
+![A2UI v1.0 3-Pane Cockpit and Tilde Team Switcher](../assets/diagrams/cockpit-core-four.svg)
+
+- **Strict 13-Component Catalog ([`a2ui.ts`](../packages/ui/src/a2ui.ts)):** Rejects all raw HTML/JS/CSS markup and enforces `don.catalog.v1` across `DecisionCard`, `BudgetGauge`, `CodeGateCard`, `SkillEvalCard`, `WorktreeLane`, `GuardAlert`, `RunTimeline`, `OutcomeReceipt`, `FactoryCard`, `FactoryChangelogCard`, `CoreFourCard`, `CronJobCard`, and `ToolSummaryCard`.
+- **`~` Tilde Team Switcher & Live Parity ([`pwa-html.ts`](../packages/ui/src/pwa-html.ts) · [`server.ts`](../packages/ui/src/server.ts)):** Lets operators switch live across lanes (`lead`, `api-keeper`, `pipeline-forge`, `client-qa`, `memory-curator`), toggle Core Four slices via `POST /api/team/core-four`, trigger or pause Cron jobs via `/api/cron*`, and review `BatchToolSummarizer` entries at `$0.00` LLM token cost over SSE (`events.seq`).
+- **CDP Screencast & Telegram "Me" Mode ([`cdp-stream.ts`](../packages/ui/src/cdp-stream.ts) · [`telegram.ts`](../packages/channels/src/telegram.ts)):** On-demand Chromium verification with `handbackAt` takeover and cold-start retry hardening, paired with pure-Bun `@mtcute/bun` Telegram rooms behind `EXCLUSIONS.txt` and two-zone outbound gates.
 
 ---
 
 ## 5. Level 4 Meta-Factory Fleet (`packages/meta`)
 
-Coordinates multiple isolated Don-Bot workspaces under strict operator governance:
-
-- **Blank Factory Templates & Skill Backports ([`packages/meta/src/templates.ts`](../packages/meta/src/templates.ts)):** Clones `don-core-v1`, validates backports with SkillEvaluator before proposing a `DecisionCard`, and persists versioned manifests.
-- **Liquid Boundary ([`packages/meta/src/roles.ts`](../packages/meta/src/roles.ts)):** Allows declarative edits (`config.yaml`, `roster.yaml`, `skills/<slug>/SKILL.md`, `workflows/*.json`, `macros/*.json`) while blocking `.tsx`/`.jsx`/`.html`, `packages/ui`, `crates/don-guard`, `vault.ts`, and `ssrf.ts`. Every mutating `DecisionCard` enforces matching `expectedTaskId`, active owner-turn authorization, and single-use consumption.
-- **Isolated Child Lifecycle & Mailbox ([`packages/meta/src/registry.ts`](../packages/meta/src/registry.ts) · [`packages/meta/src/mailbox.ts`](../packages/meta/src/mailbox.ts) · [`packages/meta/src/workflows.ts`](../packages/meta/src/workflows.ts)):** Graduates factories `empty -> operational` with 1:1 `FactoryOwner` stewards, rolls back skill files cleanly if upgrade commits fail, and secures cross-factory messaging behind `.don/access-key`, deterministic SSRF/exfil inspection, `<untrusted_tool_result>` wrapping, and Jev gates.
+- **Blank Factory Templates & Skill Backports ([`templates.ts`](../packages/meta/src/templates.ts)):** Clones `don-core-v1`, gates backports through NVIDIA SkillEvaluator + single-use `DecisionCard`s.
+- **Liquid Boundary ([`roles.ts`](../packages/meta/src/roles.ts)):** Permits declarative edits (`config.yaml`, `roster.yaml`, `SKILL.md`, workflows, macros) while hard-blocking UI source (`packages/ui`, `.tsx`/`.html`) and Rust security files (`crates/don-guard`, `vault.ts`, `ssrf.ts`).
+- **1:1 Fleet Stewards & Jev Mailbox ([`registry.ts`](../packages/meta/src/registry.ts) · [`mailbox.ts`](../packages/meta/src/mailbox.ts)):** Upgrades isolated child factories idempotently via `once()` and secures inter-factory messaging with `.don/access-key`, `<untrusted_tool_result>` escaping, SSRF checks, and Jev gates.

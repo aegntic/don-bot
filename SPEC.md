@@ -34,12 +34,14 @@ Don-Bot is a single-box, local-first software factory. You assign an engineering
 
 ## 2. Macro Architecture
 
+![Don-Bot System Topology](./assets/diagrams/system-topology.svg)
+
 ```mermaid
 flowchart TD
   subgraph Clients["Human-Near-The-Loop Clients"]
     direction LR
-    CLI["CLI (don init / run / team / guard)"]
-    PWA["PWA Cockpit (@a2ui/web_core + @a2ui/react Custom Catalog)"]
+    CLI["CLI (don init / team --merge / core-four / cron / serve)"]
+    PWA["PWA Cockpit (don.catalog.v1 + ~ Team Switcher + CDP)"]
     TG["Personal Telegram (Me Mode + DecisionCard Inline Buttons)"]
   end
 
@@ -47,6 +49,7 @@ flowchart TD
     AccessKey["Owner Access Key Gate (.don/access-key on /api, SSE, WS)"]
     A2UIStream["A2UI 1.0 Surface Stream (SSE/WS + monotonic events.seq)"]
     MacroExpander["TypeScript Macro Expander (Server-Side Data Hydration)"]
+    CronTicker["Cockpit Background Cron Ticker (Budget-Gated)"]
   end
 
   subgraph LLMProxy["Security Layer 1: LLM Proxy"]
@@ -54,18 +57,18 @@ flowchart TD
   end
 
   subgraph Core["Agent Core and Small Team (Bun + pi-durable + SQLite WAL)"]
-    Spine["Spine (packages/spine: pi-durable + chord + once() memos + self_compact)"]
-    Lead["Lead Orchestrator (canWriteCode=false · routes tasks · owns Decision Deck)"]
+    Spine["Spine (packages/spine: once() memos · self_compact · CoreFour · Cron · Summarizer)"]
+    Lead["Lead Orchestrator (canWriteCode=false · delegate_to_specialist · Decision Deck)"]
     Rooms["SQLite Agent Rooms (complexity-gated debates + @mention contract)"]
     Specialists["4 Specialists (api-keeper · pipeline-forge · client-qa · memory-curator)"]
   end
 
   subgraph GuardAndExec["Trust Boundary and Isolated Execution"]
-    Trust["Trust Boundary (packages/trust: untrusted tags · SSRF · trust-jev Slice 03)"]
-    RustGuard["crates/don-guard (Slice 03: Landlock/Seatbelt/JobObject + zeroize Vault)"]
-    Worktrees["Per-Specialist Git Worktrees (.don/worktrees + Writer Lease)"]
-    OxcGate["oxc.rs Code Gate (oxlint + oxfmt + bun test kind=code)"]
-    SkillGate["NVIDIA SkillEvaluator Gate (Tier 1/2/3 + Harness Check · kind=skill)"]
+    Trust["Trust Boundary (packages/trust: untrusted tags · SSRF · 45-Feature Jev GBDT)"]
+    RustGuard["crates/don-guard v0.6.0 (4-Target Prebuilt Binary + zeroize AES-GCM Vault)"]
+    Worktrees["Per-Specialist Git Worktrees (.don/worktrees + WriterLease --merge)"]
+    OxcGate["oxc.rs Code Gate (oxlint + oxfmt + tsc + bun test)"]
+    SkillGate["NVIDIA SkillEvaluator Gate (Tier 1/2/3 + Harness Check)"]
   end
 
   CLI --> AccessKey
@@ -74,6 +77,7 @@ flowchart TD
   AccessKey <--> A2UIStream
   A2UIStream <--> MacroExpander
   MacroExpander <--> Spine
+  CronTicker <--> Spine
   AccessKey --> Lead
   AccessKey --> Spine
   Spine <--> SafeAgents
@@ -122,7 +126,7 @@ Don-Bot separates **content selection** from **UI rendering**.
 
 ### 4.3 Don-Bot Custom Component Catalog (`don.catalog.v1`)
 
-Don-Bot rejects generic stock styling from the A2UI Basic Catalog. All interactive operator surfaces MUST use components from `don.catalog.v1`:
+Don-Bot rejects generic stock styling from the A2UI Basic Catalog. All **13** registered interactive operator surfaces MUST use components from `don.catalog.v1`:
 
 | Component ID | Cockpit Purpose | Required Properties | Allowed Actions |
 | :--- | :--- | :--- | :--- |
@@ -136,10 +140,23 @@ Don-Bot rejects generic stock styling from the A2UI Basic Catalog. All interacti
 | `OutcomeReceipt` | Summarize shipped outcome cost, duration, and check counts | `taskId`, `totalUsd`, `durationMs`, `checksPassed`, `checksTotal`, `mergeCommit` | `receipt.view_commit` |
 | `FactoryCard` | Display child factory lifecycle state, template drift, owner steward, pending cards, and unread mailbox count | `slug`, `name`, `state`, `templateId`, `templateVersion`, `ownerAgentId`, `pendingDecisions`, `unreadMail` | `factory.inspect`, `factory.upgrade`, `factory.archive` |
 | `FactoryChangelogCard` | Display Meta-Factory template or factory changelog rows with owner turn provenance and rollback refs | `entryId`, `scope`, `targetId`, `actorAgentId`, `kind`, `reason`, `status`, `diffSummary` | `changelog.view_diff`, `changelog.rollback` |
+| `CoreFourCard` | Expose per-role model tier, provider, thinking level, non-coding invariant lock, and live harness slice toggles | `roleId`, `title`, `modelTier`, `provider`, `modelId`, `thinkingLevel`, `canWriteCode`, `enabledSlices` | `core_four.update`, `core_four.toggle_slice` |
+| `CronJobCard` | Display durable scheduled job state (`idle`, `running`, `done`, `failed`, `budget_paused`), schedule, and controls | `jobId`, `name`, `schedule`, `roleId`, `enabled`, `nextRunAt`, `lastStatus` | `cron.toggle`, `cron.run_now`, `cron.delete` |
+| `ToolSummaryCard` | Render secret-scrubbed batch tool summaries flushed every `N` calls (`don_tool_summaries`) | `summaryId`, `taskId`, `agentId`, `batchIndex`, `toolCount`, `tools`, `summary`, `createdAt` | `timeline.inspect` |
 
-**Catalog Validation Rule:** Before forwarding an agent payload, `@a2ui/web_core` and the Spine validator check every component name, property type, and action ID against `don.catalog.v1`. Any invalid component or property returns a typed A2UI error envelope to the agent so the model corrects itself without breaking the client.
+**Catalog Validation Rule:** Before forwarding an agent payload, the Spine/UI validator (`validateA2UISurface`) checks every component name, property type, and action ID against `don.catalog.v1`. Any invalid component, disallowed HTML/script markup, or unknown action returns a typed `A2UIValidationError` so the model corrects itself without breaking the client.
 
 ### 4.4 TypeScript Server-Side Macro Expander ("Model Never Sees Your Data")
+
+```mermaid
+flowchart LR
+  Model["Model Response (Opaque ID Macros Only)"] --> Expander["TypeScript Macro Expander (packages/ui/src/macros.ts)"]
+  SQLite["SQLite WAL + Git Diffs + Logs"] --> Expander
+  Expander --> Validator["validateA2UISurface() (don.catalog.v1)"]
+  Validator -->|"Auth via .don/access-key"| Client["3-Pane Cockpit DOM"]
+  Client -->|"Operator Button Click"| ActionAPI["POST /api/a2ui/action (withTurnLock + don_turns)"]
+  ActionAPI --> SQLite
+```
 
 Don-Bot uses **TypeScript** macros inside `packages/spine` and `packages/ui` — never a Python runtime.
 
@@ -256,3 +273,20 @@ Every slice release **MUST** pass all deterministic `--faux` chaos tests in scop
 | **7. SkillEvaluator Quarantine & Gate** | Evaluate clean, poisoned (Unicode tags, bidi, prompt injection, secrets), and malformed skills | Clean skill passes and records `don_skill_evals`; poisoned/malformed skills fail closed, open `skill_eval_gate` card, flag `not_loaded` harnesses, and block `assertGitPushAllowed`; CLI JSON contract + `requireBinary` verified | **Slice 01+ (Passing)** |
 | **8–12. Full-Factory Slices 02–05, System-One Jev & Onboarding** | Live parallel worktrees + Verifier + Rust `don-guard` + `@mtcute/bun` + A2UI PWA/CDP + Jev wire/GBDT + encrypted OAuth onboarding & Cockpit pairing | All 5 Jev gates (`ToolTask`, Complexity Router, Semantic Stop Gate, External Firewall, Memory Promotion), encrypted `VaultCredentialStore`, 1-login OpenRouter auto-Jev, single-use `DON-XXXXXX` pairing, and Slices 02–05 suites pass offline at `$0.00` | **Slices 02–05 (Passing)** |
 | **13. Meta-Factory Fleet, Backports & Jev Mailbox** | Template cloning, Liquid Boundary rejection, SkillEvaluator backport block/commit, 3-state spawn/hire/upgrade lifecycle (`once()` replay), Jev-gated 3-tool mailbox, budget-capped heartbeat, A2UI fleet macros, `/api/meta/*` & CLI | Liquid Boundary rejects UI/Rust targets; poisoned skill backports fail closed; clean backports increment template versions; isolated child factories spawn, hire owners, and sync upgraded skills idempotently; mailbox blocks invalid keys & unapproved mutations and wraps messages in `<untrusted_tool_result>`; heartbeat halts on budget cap | **Slice 06 (Passing)** |
+
+---
+
+## 8. `v0.6.0` Release Additions (Delegation Parity, Durable Cron & Cross-Platform `don-guard`)
+
+```mermaid
+stateDiagram-v2
+  [*] --> Template : "don-core-v1 Blank Factory"
+  Template --> Empty : "don factory spawn (once() replay)"
+  Empty --> Operational : "don factory hire + DecisionCard"
+  Operational --> Operational : "Upgrade / Backport via Liquid Boundary + SkillEvaluator"
+  Operational --> Archived : "don factory archive"
+```
+
+1. **Multi-Agent Live Delegation & `--merge` (`packages/team`):** `delegate_to_specialist` dispatches coding specialists into isolated `.don/worktrees/<task>-<role>` checkouts; `commitWorktreeChanges()` stages verified files while excluding `.don/`, `node_modules/`, and `crates/*/target/`; `mergeWorktreeIntoMain()` acquires `.don/writer.lease.json` and merges cleanly without auto-pushing.
+2. **Core Four Parity & Durable Cron (`packages/spine`, `packages/ui`, `packages/cli`):** `don_agent_overrides`, `don_cron_jobs`, and `don_tool_summaries` synchronize across agent tools, Cockpit REST/SSE endpoints (`/api/team/core-four`, `/api/cron`, `/api/tool-summaries`), and CLI commands (`don core-four`, `don cron`), while strictly preserving `NON_CODING_ROLE_IDS`.
+3. **Cross-Platform Native Distribution (`.github/workflows/release.yml`, `scripts/install.sh`):** Publishes `don-guard-linux-x86_64`, `don-guard-macos-aarch64`, `don-guard-macos-x86_64`, `don-guard-windows-x86_64.exe`, and `SHA256SUMS.txt` on every `v*` release tag, verified across `108` automated tests (`99` Bun + `9` Rust).
